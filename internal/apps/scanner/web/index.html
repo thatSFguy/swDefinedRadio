@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spectrum Scanner</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --warn:#f0883e;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    background:var(--bg); color:var(--fg); display:flex; flex-direction:column;
+    font:13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:18px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:14px; font-weight:600; }
+  #stats { color:var(--dim); font-size:12px; display:flex; gap:16px; flex-wrap:wrap; }
+  #stats b { color:var(--fg); font-variant-numeric:tabular-nums; }
+  #stale { color:var(--warn); }
+
+  main { flex:1; display:flex; min-height:0; }
+  #left { flex:1; display:flex; flex-direction:column; min-width:0; padding:10px 14px; gap:8px; }
+  canvas { width:100%; display:block; background:#080b10; border:1px solid var(--line);
+           border-radius:6px; cursor:crosshair; }
+  #spectrum { height:230px; flex:none; }
+  #waterfall { flex:1; min-height:120px; }
+  #readout { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; height:18px; }
+  #readout b { color:var(--accent); }
+
+  #controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+              padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  #controls label { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  #controls input[type=number] {
+    width:92px; background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:5px; padding:4px 7px; font:inherit; font-variant-numeric:tabular-nums;
+  }
+  #controls input:focus { border-color:var(--accent); outline:none; }
+  #controls button {
+    background:#21262d; color:var(--fg); border:1px solid var(--line); border-radius:5px;
+    padding:4px 11px; font:inherit; cursor:pointer;
+  }
+  #controls button:hover { border-color:var(--accent); color:var(--accent); }
+  #apply { background:#1f6feb; border-color:#1f6feb; color:#fff; font-weight:600; }
+  #apply:hover { background:#2b7ef5; color:#fff; }
+  #apply:disabled { opacity:.45; cursor:default; }
+  #controls button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
+  .presets { display:flex; gap:4px; flex-wrap:wrap; }
+  .presets button { padding:3px 8px; font-size:11px; }
+  #est { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  #est b { color:var(--fg); }
+  #est.slow b { color:var(--warn); }
+  #cfgerr { color:var(--bad); font-size:12px; }
+  :root { --bad:#f85149; }
+
+  aside { width:340px; border-left:1px solid var(--line); background:var(--panel);
+          overflow-y:auto; padding:10px 0; }
+  aside h2 { margin:0 0 8px; padding:0 14px; font-size:11px; color:var(--dim);
+             text-transform:uppercase; letter-spacing:.6px; font-weight:500; }
+  .pk { padding:6px 14px; border-bottom:1px solid #21262d; cursor:pointer; }
+  .pk:hover { background:#1c2230; }
+  .pk .f { font-weight:600; font-variant-numeric:tabular-nums; }
+  .pk .p { float:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .pk .b { color:var(--dim); font-size:11px; }
+  .empty { color:var(--dim); padding:20px 14px; font-size:12px; }
+  .pk.spur { opacity:.55; }
+  .warn { color:var(--warn); font-size:10px; font-weight:500; }
+  @media (max-width:900px) { main { flex-direction:column; } aside { width:100%; height:38%; border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Spectrum Scanner</h1>
+  <div id="stats">
+    <span>Range <b id="s-range">—</b></span>
+    <span>Sweeps <b id="s-n">0</b></span>
+    <span>Sweep time <b id="s-t">—</b></span>
+    <span>Bins <b id="s-b">—</b></span>
+    <span>Noise floor <b id="s-f">—</b></span>
+    <span>Signals <b id="s-p">0</b></span>
+    <span id="stale"></span>
+  </div>
+</header>
+
+<div id="controls">
+  <label for="f-start">Start</label>
+  <input id="f-start" type="number" step="0.1" min="24" max="1766"> <span class="unit">MHz</span>
+  <label for="f-stop">Stop</label>
+  <input id="f-stop" type="number" step="0.1" min="24" max="1766"> <span class="unit">MHz</span>
+  <button id="apply">Apply</button>
+  <button id="remember" aria-pressed="false"
+    title="come back to this range next time, instead of the default sweep">Remember</button>
+  <div class="presets" id="presets"></div>
+  <span id="est"></span>
+  <span id="cfgerr"></span>
+</div>
+
+<main>
+  <div id="left">
+    <canvas id="spectrum"></canvas>
+    <div id="readout">&nbsp;</div>
+    <canvas id="waterfall"></canvas>
+  </div>
+  <aside>
+    <h2>Strongest signals</h2>
+    <div id="peaks"></div>
+    <div id="p-empty" class="empty">Sweeping…</div>
+  </aside>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const spec = $('spectrum'), wf = $('waterfall');
+
+// Ranges worth jumping straight to. Narrowing the span is the most
+// effective way to speed a sweep up: time is steps x (settle + dwell),
+// and steps is proportional to the span.
+const PRESETS = [
+  ['FM',       88,    108],
+  ['Airband', 118,    137],
+  ['2 m',     144,    148],
+  ['NOAA',    162,    163],
+  ['315 ISM', 314.5,  315.5],
+  ['70 cm',   420,    450],
+  ['433 ISM', 433,    435],
+  ['UHF TV',  470,    600],
+  ['900 ISM', 902,    928],
+  ['UAT',     977,    979],
+  ['ADS-B',  1085,   1095],
+  ['Wide',     88,   1090],
+];
+const sctx = spec.getContext('2d'), wctx = wf.getContext('2d');
+
+let sweep = null, peaks = [], floor = -80, hover = null;
+// Fixed display range in dBFS; the spectrum is drawn against this so the
+// trace does not jump around as the floor drifts between sweeps.
+let dbMin = -110, dbMax = -20;
+
+function fit(c) {
+  const r = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * r || c.height !== h * r) {
+    c.width = w * r; c.height = h * r;
+    c.getContext('2d').setTransform(r, 0, 0, r, 0, 0);
+  }
+  return {w, h};
+}
+
+const fmtHz = v =>
+  v >= 1e9 ? (v/1e9).toFixed(4) + ' GHz' :
+  v >= 1e6 ? (v/1e6).toFixed(3) + ' MHz' :
+  v >= 1e3 ? (v/1e3).toFixed(1) + ' kHz' : v.toFixed(0) + ' Hz';
+
+// Map a power in dB to a colour: dark blue floor through cyan, yellow, red.
+function heat(db) {
+  let t = (db - dbMin) / (dbMax - dbMin);
+  t = Math.max(0, Math.min(1, t));
+  const stops = [
+    [0.00, [8, 11, 16]], [0.25, [20, 45, 95]], [0.45, [30, 120, 160]],
+    [0.65, [90, 190, 120]], [0.82, [230, 200, 70]], [1.00, [240, 80, 60]],
+  ];
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [t0, c0] = stops[i-1], [t1, c1] = stops[i];
+      const f = (t - t0) / (t1 - t0);
+      return [0,1,2].map(k => Math.round(c0[k] + f * (c1[k] - c0[k])));
+    }
+  }
+  return stops[stops.length-1][1];
+}
+
+function drawSpectrum() {
+  const {w, h} = fit(spec);
+  sctx.clearRect(0, 0, w, h);
+  if (!sweep) return;
+
+  const p = sweep.power, n = p.length;
+  const y = db => h - ((db - dbMin) / (dbMax - dbMin)) * h;
+
+  // Horizontal grid every 20 dB.
+  sctx.strokeStyle = '#1b222c'; sctx.fillStyle = '#4d5866';
+  sctx.lineWidth = 1; sctx.font = '10px ui-monospace, monospace';
+  for (let db = Math.ceil(dbMin/20)*20; db <= dbMax; db += 20) {
+    const yy = Math.round(y(db)) + 0.5;
+    sctx.beginPath(); sctx.moveTo(0, yy); sctx.lineTo(w, yy); sctx.stroke();
+    sctx.fillText(db + ' dB', 3, yy - 3);
+  }
+
+  // Frequency ticks.
+  const start = Number(sweep.start), stop = Number(sweep.stop);
+  for (let i = 0; i <= 8; i++) {
+    const x = Math.round(w * i / 8) + 0.5;
+    sctx.strokeStyle = '#1b222c';
+    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, h); sctx.stroke();
+    if (i && i < 8) {
+      const f = start + (stop - start) * i / 8;
+      sctx.fillStyle = '#4d5866';
+      sctx.fillText(fmtHz(f), x + 3, h - 4);
+    }
+  }
+
+  // The noise floor, for reference.
+  const fy = Math.round(y(floor)) + 0.5;
+  sctx.strokeStyle = '#2d4a6b'; sctx.setLineDash([4, 4]);
+  sctx.beginPath(); sctx.moveTo(0, fy); sctx.lineTo(w, fy); sctx.stroke();
+  sctx.setLineDash([]);
+
+  // The trace. There are usually far more bins than pixels, so each
+  // column shows the strongest bin it covers — that is what keeps a
+  // narrow carrier visible instead of averaging it away.
+  sctx.strokeStyle = '#58a6ff'; sctx.lineWidth = 1;
+  sctx.beginPath();
+  let started = false;
+  for (let x = 0; x < w; x++) {
+    const a = Math.floor(n * x / w), b = Math.max(a + 1, Math.floor(n * (x+1) / w));
+    let peak = -Infinity;
+    for (let i = a; i < b && i < n; i++) if (p[i] !== null && p[i] > peak) peak = p[i];
+    if (peak === -Infinity) { started = false; continue; }
+    const yy = y(peak);
+    if (!started) { sctx.moveTo(x, yy); started = true; } else sctx.lineTo(x, yy);
+  }
+  sctx.stroke();
+
+  if (hover !== null) {
+    const x = Math.round(hover) + 0.5;
+    sctx.strokeStyle = '#8b949e';
+    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, h); sctx.stroke();
+  }
+}
+
+function drawWaterfall(rows) {
+  const {w, h} = fit(wf);
+  wctx.clearRect(0, 0, w, h);
+  if (!rows || !rows.length) return;
+
+  const rowH = Math.max(1, h / rows.length);
+  const img = wctx.createImageData(Math.max(1, Math.floor(w)), rows.length);
+
+  for (let r = 0; r < rows.length; r++) {
+    const p = rows[rows.length - 1 - r], n = p.length;   // newest at top
+    for (let x = 0; x < img.width; x++) {
+      const a = Math.floor(n * x / img.width), b = Math.max(a + 1, Math.floor(n * (x+1) / img.width));
+      let peak = -Infinity;
+      for (let i = a; i < b && i < n; i++) if (p[i] !== null && p[i] > peak) peak = p[i];
+      const [cr, cg, cb] = peak === -Infinity ? [8,11,16] : heat(peak);
+      const o = (r * img.width + x) * 4;
+      img.data[o] = cr; img.data[o+1] = cg; img.data[o+2] = cb; img.data[o+3] = 255;
+    }
+  }
+  // Blit the raw rows, then stretch them to fill the canvas height.
+  createImageBitmap(img).then(bmp => {
+    wctx.imageSmoothingEnabled = false;
+    wctx.drawImage(bmp, 0, 0, img.width, rows.length, 0, 0, w, h);
+  });
+}
+
+function renderPeaks() {
+  $('p-empty').style.display = peaks.length ? 'none' : '';
+  $('peaks').replaceChildren(...peaks.map(pk => {
+    const d = document.createElement('div');
+    d.className = 'pk';
+    if (pk.suspect) d.classList.add('spur');
+    d.innerHTML = `<span class="p">${pk.power.toFixed(0)} dB · ${pk.snr.toFixed(0)} SNR</span>` +
+                  `<span class="f">${fmtHz(pk.freq)}${pk.suspect ? ' <span class="warn">spur?</span>' : ''}</span>` +
+                  `<div class="b">${pk.suspect || (pk.band || 'unallocated') + ' · ' + fmtHz(pk.width_hz) + ' wide'}</div>`;
+    d.onclick = () => {
+      if (!sweep) return;
+      const start = Number(sweep.start), stop = Number(sweep.stop);
+      hover = spec.clientWidth * (pk.freq - start) / (stop - start);
+      showReadout(hover);
+      drawSpectrum();
+    };
+    return d;
+  }));
+}
+
+function showReadout(x) {
+  if (!sweep) return;
+  const start = Number(sweep.start), stop = Number(sweep.stop);
+  const f = start + (stop - start) * x / spec.clientWidth;
+  const i = Math.floor((f - start) / sweep.bin_hz);
+  const p = sweep.power[i];
+  const band = (peaks.find(k => Math.abs(k.freq - f) < sweep.bin_hz * 40) || {}).band;
+  $('readout').innerHTML = `<b>${fmtHz(f)}</b>` +
+    (p == null ? '  (no data)' : `  ${p.toFixed(1)} dBFS`) +
+    (band ? `  ·  ${band}` : '');
+}
+
+spec.addEventListener('mousemove', e => {
+  hover = e.offsetX; showReadout(hover); drawSpectrum();
+});
+spec.addEventListener('mouseleave', () => {
+  hover = null; $('readout').innerHTML = '&nbsp;'; drawSpectrum();
+});
+
+let cfg = null, cfgVersion = -1;
+
+function fmtDur(sec) {
+  if (sec < 90) return sec.toFixed(0) + ' s';
+  const m = Math.floor(sec / 60);
+  return m + ' min ' + Math.round(sec - m * 60) + ' s';
+}
+
+// Estimate locally as the inputs change, so the cost of a wider span is
+// visible before committing to it.
+function updateEstimate() {
+  if (!cfg) return;
+  const a = parseFloat($('f-start').value) * 1e6;
+  const b = parseFloat($('f-stop').value) * 1e6;
+  const err = $('cfgerr');
+  const est = $('est');
+
+  if (!isFinite(a) || !isFinite(b) || b <= a) {
+    err.textContent = 'stop must be above start';
+    est.textContent = ''; $('apply').disabled = true;
+    return;
+  }
+  if (a < cfg.tuner_low_hz || b > cfg.tuner_high_hz) {
+    err.textContent = `tuner covers ${(cfg.tuner_low_hz/1e6).toFixed(0)}–${(cfg.tuner_high_hz/1e6).toFixed(0)} MHz`;
+    est.textContent = ''; $('apply').disabled = true;
+    return;
+  }
+  err.textContent = '';
+  $('apply').disabled = false;
+
+  // Mirrors the server: usable bandwidth per step is rate x crop, and
+  // bin count comes from the same rate.
+  const usable = cfg.bin_hz * cfg.bins_per_step;
+  const steps = Math.ceil((b - a) / usable);
+  const secs = steps * (cfg.settle_ms + cfg.dwell_ms) / 1000;
+  est.innerHTML = `${steps} steps · about <b>${fmtDur(secs)}</b> per sweep`;
+  est.classList.toggle('slow', secs > 45);
+}
+
+// The range is the one thing worth carrying across a restart: a sweep
+// is usually narrowed to something specific, and coming back to the
+// full 88-1090 MHz every time means re-typing it. Off by default, since
+// a receiver that silently starts somewhere other than its documented
+// default is confusing.
+function remember(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch (e) { /* not available */ }
+}
+function recall(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function forget(key) {
+  try { localStorage.removeItem(key); } catch (e) { /* not available */ }
+}
+
+const rememberBtn = $('remember');
+const remembering = () => rememberBtn.getAttribute('aria-pressed') === 'true';
+
+function saveRange() {
+  if (!remembering()) return;
+  const a = parseFloat($('f-start').value), b = parseFloat($('f-stop').value);
+  if (isFinite(a) && isFinite(b)) remember('scanRange', `${a},${b}`);
+}
+
+rememberBtn.onclick = () => {
+  const on = !remembering();
+  rememberBtn.setAttribute('aria-pressed', on);
+  remember('scanRemember', on);
+  if (on) saveRange(); else forget('scanRange');
+};
+
+if (recall('scanRemember') === 'true') {
+  rememberBtn.setAttribute('aria-pressed', 'true');
+}
+
+// Applied once, after the first look at what the server is sweeping:
+// the range lives in the sweeper, not in the page, so restoring it
+// means asking the server to change rather than filling in a box.
+let restored = false;
+function restoreRange() {
+  if (restored) return;
+  restored = true;
+  if (!remembering()) return;
+  const saved = (recall('scanRange') || '').split(',').map(parseFloat);
+  if (saved.length !== 2 || !saved.every(isFinite)) return;
+  const [a, b] = saved;
+  if (Math.abs(a * 1e6 - cfg.start_hz) < 1 && Math.abs(b * 1e6 - cfg.stop_hz) < 1) {
+    return; // already sweeping it
+  }
+  $('f-start').value = a;
+  $('f-stop').value = b;
+  applyConfig(a, b);
+}
+
+async function loadConfig() {
+  const r = await fetch('/api/config');
+  if (!r.ok) return;
+  cfg = await r.json();
+  // The server reports steps and bins for the current span; derive how
+  // many bins one step covers so the estimate can be recomputed locally.
+  cfg.bins_per_step = Math.max(1, Math.round(cfg.bins / cfg.steps));
+  if (cfg.version !== cfgVersion) {
+    cfgVersion = cfg.version;
+    $('f-start').value = (cfg.start_hz / 1e6).toFixed(3).replace(/\.?0+$/, '');
+    $('f-stop').value = (cfg.stop_hz / 1e6).toFixed(3).replace(/\.?0+$/, '');
+  }
+  updateEstimate();
+  restoreRange();
+}
+
+async function applyConfig(startMHz, stopMHz) {
+  $('apply').disabled = true;
+  try {
+    const r = await fetch('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({start_hz: startMHz * 1e6, stop_hz: stopMHz * 1e6}),
+    });
+    if (!r.ok) {
+      $('cfgerr').textContent = (await r.text()).trim();
+      return;
+    }
+    $('cfgerr').textContent = '';
+    cfg = await r.json();
+    cfg.bins_per_step = Math.max(1, Math.round(cfg.bins / cfg.steps));
+    cfgVersion = cfg.version;
+    sweep = null; peaks = []; lastSweepCount = -1;
+    drawSpectrum(); drawWaterfall([]); renderPeaks();
+    updateEstimate();
+    saveRange();
+  } finally {
+    $('apply').disabled = false;
+  }
+}
+
+$('apply').onclick = () => applyConfig(parseFloat($('f-start').value), parseFloat($('f-stop').value));
+for (const el of [$('f-start'), $('f-stop')]) {
+  el.addEventListener('input', updateEstimate);
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') $('apply').click(); });
+}
+
+$('presets').replaceChildren(...PRESETS.map(([name, a, b]) => {
+  const btn = document.createElement('button');
+  btn.textContent = name;
+  btn.title = `${a}–${b} MHz`;
+  btn.onclick = () => {
+    $('f-start').value = a; $('f-stop').value = b;
+    updateEstimate(); applyConfig(a, b);
+  };
+  return btn;
+}));
+
+let lastSweepCount = -1;
+
+async function poll() {
+  try {
+    // Ask for roughly one point per pixel; a sweep can hold hundreds of
+    // thousands of bins and shipping them all would be pointless.
+    const width = Math.max(400, Math.min(4000, Math.round(spec.clientWidth * 2)));
+    const r = await fetch('/api/spectrum?width=' + width);
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    $('stale').textContent = '';
+    $('s-n').textContent = d.sweeps;
+    if (!d.sweep) return;
+
+    sweep = d.sweep; peaks = d.peaks || []; floor = d.floor;
+    // Keep the display range anchored to the floor so the trace fills
+    // the panel whatever the gain happens to be.
+    dbMin = Math.round(floor - 15); dbMax = Math.round(floor + 75);
+
+    $('s-range').textContent = fmtHz(Number(sweep.start)) + ' – ' + fmtHz(Number(sweep.stop));
+    $('s-t').textContent = sweep.took_s.toFixed(1) + ' s';
+    $('s-b').textContent = sweep.bins.toLocaleString();
+    $('s-f').textContent = floor.toFixed(0) + ' dB';
+    $('s-p').textContent = peaks.length;
+
+    drawSpectrum();
+    renderPeaks();
+
+    // The waterfall only changes when a sweep completes, and a full
+    // sweep can take half a minute, so do not refetch it every poll.
+    if (d.sweeps !== lastSweepCount) {
+      lastSweepCount = d.sweeps;
+      const ww = Math.max(300, Math.min(2000, Math.round(wf.clientWidth)));
+      const wr = await fetch('/api/waterfall?width=' + ww);
+      if (wr.ok) drawWaterfall((await wr.json()).rows);
+    }
+  } catch (e) {
+    $('stale').textContent = 'scanner offline';
+  }
+}
+loadConfig();
+poll();
+setInterval(poll, 2000);
+setInterval(loadConfig, 5000);
+window.addEventListener('resize', () => { drawSpectrum(); });
+</script>
+</body>
+</html>

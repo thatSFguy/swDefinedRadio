@@ -1,0 +1,487 @@
+#!/usr/bin/env bash
+#
+# sdr — build and run the receivers in this repo.
+#
+#   ./sdr                   every receiver, with tabs   (foreground)
+#   ./sdr tpms              tyre-pressure logger        (foreground)
+#   ./sdr adsb              ADS-B aircraft receiver     (foreground)
+#   ./sdr uat               978 MHz UAT receiver, US    (foreground)
+#   ./sdr scanner           spectrum sweeper            (foreground)
+#   ./sdr fm 98.7           listen to broadcast FM      (foreground)
+#   ./sdr start tpms        run in the background, logging to logs/
+#   ./sdr start             ask which one, then run it in the background
+#   ./sdr stop              stop whatever is running
+#   ./sdr status            what is running, and is the radio usable
+#   ./sdr logs [tool]       follow a background receiver's log
+#   ./sdr setpos LAT LON    save your antenna position as the default
+#   ./sdr alerts            show what the aircraft alerts have caught
+#   ./sdr alerts-example    write a starter alerts.json to edit
+#   ./sdr web               same as ./sdr — the tabbed app, explicitly
+#   ./sdr build             rebuild every binary
+#   ./sdr build windows     cross-compile one sdr.exe into dist/windows/
+#
+# Run with no arguments for the tabbed web app, which serves every
+# receiver and hands the radio to whichever tab is chosen. The individual
+# commands still run one receiver on its own, which is the simpler thing
+# when that is all you want. Only one can hold the dongle at a time, so
+# starting one while another runs asks first; pass -y to skip that prompt.
+#
+# Extra arguments are passed through, so `./sdr adsb -lat 43.2 -lon -85.6`
+# and `./sdr start tpms -freq 433.92M` both work.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$root"
+bin="$root/bin"
+logs="$root/logs"
+
+TOOLS=(hub adsb tpms scanner fm uat)
+PORT=9999          # every receiver's web UI; only one runs at a time
+
+red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
+ylw()  { printf '\033[33m%s\033[0m\n' "$*"; }
+dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+die()  { red "$*" >&2; exit 1; }
+
+is_tool() { local t; for t in "${TOOLS[@]}"; do [ "$t" = "${1:-}" ] && return 0; done; return 1; }
+
+# tool_pattern is TOOLS as a pgrep/pkill alternation, so the process
+# matching below stays correct when a receiver is added to TOOLS.
+tool_pattern() { local IFS='|'; echo "${TOOLS[*]}"; }
+
+FORCE=0
+
+# confirm asks before doing something the user did not explicitly request,
+# such as stopping a receiver to free the radio for another one. Without a
+# terminal it refuses rather than guessing, so a script cannot silently
+# take the radio away from a running receiver.
+confirm() {
+  local prompt="$1"
+  [ "$FORCE" = 1 ] && return 0
+  if [ ! -t 0 ]; then
+    red "$prompt"
+    dim "  No terminal to ask on — re-run with -y if that is what you want."
+    return 1
+  fi
+  local ans
+  read -r -p "$(ylw "$prompt [y/N] ")" ans
+  [[ "$ans" =~ ^[Yy] ]]
+}
+
+# --- Go -------------------------------------------------------------------
+# Go is not on PATH in a non-login shell, so look where it actually lives.
+find_go() {
+  if command -v go >/dev/null 2>&1; then command -v go; return 0; fi
+  local c
+  for c in "$HOME/.local/lib/go/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+# --- the radio ------------------------------------------------------------
+# Returns the device node for the dongle, so its permissions can be checked
+# before a receiver starts and fails with an opaque libusb error.
+radio_node() {
+  local line bus dev
+  line=$(lsusb 2>/dev/null | grep -iE '0bda:283[89]|RTL283' | head -1) || return 1
+  [ -n "$line" ] || return 1
+  bus=$(awk '{print $2}' <<<"$line")
+  dev=$(awk '{print $4}' <<<"$line" | tr -d ':')
+  echo "/dev/bus/usb/$bus/$dev"
+}
+
+check_radio() {
+  local node
+  if ! node=$(radio_node); then
+    red "No RTL-SDR found."
+    dim "  Under WSL, attach it from an elevated PowerShell:  usbipd attach --wsl --busid <id>"
+    return 1
+  fi
+  if [ ! -w "$node" ]; then
+    red "Found the dongle at $node but cannot open it (need write access)."
+    dim "  The udev rule did not apply — this resets whenever the device is re-attached:"
+    dim "    sudo udevadm control --reload-rules"
+    dim "    sudo udevadm trigger --action=add --subsystem-match=usb"
+    return 1
+  fi
+  return 0
+}
+
+# Only one process can hold the dongle, so starting one receiver means
+# stopping the other.
+radio_holder() {
+  pgrep -a -x "$(tool_pattern)|rtl_sdr|rtl_433|rtl_tcp" 2>/dev/null || true
+}
+
+pidfile() { echo "$logs/$1.pid"; }
+logfile() { echo "$logs/$1.log"; }
+
+running_pid() {
+  local pf; pf=$(pidfile "$1")
+  [ -f "$pf" ] || return 1
+  local pid; pid=$(cat "$pf" 2>/dev/null) || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
+  rm -f "$pf"   # stale
+  return 1
+}
+
+# --- build ----------------------------------------------------------------
+needs_build() {
+  local name="$1"
+  [ -x "$bin/$name" ] || return 0
+  [ -n "$(find cmd internal -type f \( -name '*.go' -o -name '*.html' \) \
+            -newer "$bin/$name" -print -quit 2>/dev/null)" ]
+}
+
+# cross_build compiles every tool for another platform, into dist/<os>/.
+# Nothing here uses cgo, so this needs no toolchain beyond Go itself.
+#
+# The binaries are only half of what is needed over there: every receiver
+# drives an external rtl-sdr program, and on Windows the dongle also needs
+# the WinUSB driver that Zadig installs. See the notes printed below.
+cross_build() {
+  local os="$1" ext="" out
+  case "$os" in
+    windows) ext=".exe" ;;
+    linux|darwin) ;;
+    *) die "unknown platform: $os (want windows, linux or darwin)" ;;
+  esac
+  local go; go=$(find_go) || die "Go not found. Install it, or put it on PATH."
+  out="$root/dist/$os"
+  mkdir -p "$out"
+  dim "building sdr for $os…"
+  GOOS="$os" GOARCH=amd64 "$go" build -o "$out/sdr$ext" ./cmd/sdr \
+    || die "build failed ($os)"
+  grn "built dist/$os/sdr$ext"
+  dim "  One binary, every receiver: run it with no arguments for the"
+  dim "  tabbed app, or name one — sdr adsb, sdr fm 98.7, sdr alerts."
+  if [ "$os" = windows ]; then
+    dim ""
+    dim "  Copy it over and run:  sdr.exe install"
+    dim "  which puts it under %LOCALAPPDATA%, adds it to the PATH, and"
+    dim "  fetches rtl_tcp, rtl_sdr and rtl_433. No administrator needed."
+    dim ""
+    dim "  The one thing it cannot do is the driver: Windows binds the"
+    dim "  dongle to its television driver, and Zadig has to rebind it to"
+    dim "  WinUSB. The installer checks, and says so if that is pending."
+    dim "  If the dongle is attached to WSL, release it first:"
+    dim "    usbipd detach --busid <id>"
+  fi
+}
+
+build() {
+  local go; go=$(find_go) || die "Go not found. Install it, or put it on PATH."
+  local name built=0
+  for name in "${TOOLS[@]}"; do
+    if [ "${1:-}" = "--force" ] || needs_build "$name"; then
+      dim "building $name…"
+      "$go" build -o "$bin/$name" "./cmd/$name" || die "build failed: $name"
+      built=1
+    fi
+  done
+  [ "$built" = 1 ] && grn "built" || true
+}
+
+# --- commands -------------------------------------------------------------
+cmd_run() {          # foreground
+  local tool="$1"; shift
+  build
+  check_radio || exit 1
+  local holder; holder=$(radio_holder)
+  if [ -n "$holder" ]; then
+    ylw "The radio is already in use — only one receiver can hold it:"
+    sed 's/^/  /' <<<"$holder"
+    confirm "Stop that and start $tool instead?" || die "Left alone. Nothing changed."
+    cmd_stop
+  fi
+  grn "starting $tool — Ctrl+C to stop"
+  exec "$bin/$tool" "$@"
+}
+
+cmd_start() {        # background
+  local tool="$1"; shift
+  is_tool "$tool" || die "unknown tool: $tool (want: ${TOOLS[*]})"
+  build
+  check_radio || exit 1
+  if running_pid "$tool" >/dev/null; then
+    die "$tool is already running (pid $(running_pid "$tool")). Use ./sdr stop first."
+  fi
+  local holder; holder=$(radio_holder)
+  if [ -n "$holder" ]; then
+    ylw "The radio is already in use — only one receiver can hold it:"
+    sed 's/^/  /' <<<"$holder"
+    confirm "Stop that and start $tool instead?" || die "Left alone. Nothing changed."
+    cmd_stop
+  fi
+
+  mkdir -p "$logs"
+  nohup "$bin/$tool" "$@" >>"$(logfile "$tool")" 2>&1 &
+  echo $! > "$(pidfile "$tool")"
+  sleep 1
+  if ! running_pid "$tool" >/dev/null; then
+    red "$tool exited immediately. Last lines:"
+    tail -15 "$(logfile "$tool")" | sed 's/^/  /'
+    exit 1
+  fi
+  grn "$tool running in the background (pid $(cat "$(pidfile "$tool")"))"
+  dim "  log:  ./sdr logs $tool"
+  dim "  stop: ./sdr stop"
+  grn "  →     $(web_url "$@")"
+}
+
+# web_url reports where the UI will be, respecting a -http override in the
+# arguments rather than assuming the default port.
+web_url() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "-http" ] || [ "$prev" = "--http" ]; then
+      case "$a" in
+        :*) echo "http://localhost$a"; return ;;
+        *)  echo "http://$a"; return ;;
+      esac
+    fi
+    case "$a" in
+      -http=*|--http=*)
+        local v="${a#*=}"
+        case "$v" in
+          :*) echo "http://localhost$v" ;;
+          *)  echo "http://$v" ;;
+        esac
+        return ;;
+    esac
+    prev="$a"
+  done
+  echo "http://localhost:$PORT"
+}
+
+cmd_stop() {
+  local tool stopped=0 pid
+  for tool in "${TOOLS[@]}"; do
+    if pid=$(running_pid "$tool"); then
+      kill "$pid" 2>/dev/null || true
+      rm -f "$(pidfile "$tool")"
+      grn "stopped $tool (pid $pid)"
+      stopped=1
+    fi
+  done
+  # Catch instances started outside this script, plus any orphaned child
+  # still holding the dongle open.
+  if pkill -x "$(tool_pattern)" 2>/dev/null; then
+    grn "stopped a receiver started outside this script"
+    stopped=1
+  fi
+  sleep 1
+  if pkill -x 'rtl_sdr|rtl_433|rtl_tcp' 2>/dev/null; then
+    dim "released the radio"
+    stopped=1
+  fi
+  [ "$stopped" = 1 ] || dim "nothing was running"
+}
+
+# cmd_setpos records the antenna position in config.json, which becomes the
+# default for adsb's -lat/-lon. Passing the flags still overrides it.
+cmd_setpos() {
+  [ $# -eq 2 ] || die "usage: ./sdr setpos <lat> <lon>   e.g. ./sdr setpos 51.4779 -0.0015"
+  local lat="$1" lon="$2"
+  awk -v a="$lat" -v o="$lon" 'BEGIN{
+    if (a !~ /^-?[0-9]+(\.[0-9]+)?$/ || o !~ /^-?[0-9]+(\.[0-9]+)?$/) exit 1
+    if (a < -90 || a > 90)   exit 2
+    if (o < -180 || o > 180) exit 3
+  }' || die "not a valid latitude/longitude: $lat, $lon"
+
+  local cfg="${SDR_CONFIG:-$root/config.json}"
+  printf '{\n  "lat": %s,\n  "lon": %s\n}\n' "$lat" "$lon" > "$cfg"
+  grn "saved $lat, $lon to $cfg"
+  dim "  adsb now uses this unless you pass -lat/-lon"
+}
+
+# cmd_alerts prints the alert log newest first. It is a JSON line per
+# alert, so jq is used when it is there and the raw lines shown when it
+# is not.
+cmd_alerts() {
+  local f="$root/data/alerts.jsonl"
+  [ -f "$f" ] || die "nothing logged yet ($f). Alerts appear once adsb has heard something on its watchlist."
+  local n="${1:-20}"
+  if command -v jq >/dev/null; then
+    tac "$f" | head -n "$n" | jq -r '"\(.at[11:19])  \(.rule)  \(.callsign // .hex)  \(.note // "")"'
+  else
+    tac "$f" | head -n "$n"
+  fi
+}
+
+cmd_alerts_example() {
+  build
+  "$bin/adsb" -alerts-example "$@"
+}
+
+show_url() {
+  local t pid
+  for t in "${TOOLS[@]}"; do
+    if pid=$(running_pid "$t"); then
+      grn "web:      http://localhost:$PORT"
+      return
+    fi
+  done
+  dim "web:      nothing running"
+}
+
+show_position() {
+  local cfg
+  for cfg in "${SDR_CONFIG:-}" "$root/config.json" "$HOME/.config/sdr/config.json"; do
+    [ -n "$cfg" ] && [ -f "$cfg" ] || continue
+    local lat lon
+    lat=$(sed -n 's/.*"lat"[[:space:]]*:[[:space:]]*\([-0-9.]*\).*/\1/p' "$cfg" | head -1)
+    lon=$(sed -n 's/.*"lon"[[:space:]]*:[[:space:]]*\([-0-9.]*\).*/\1/p' "$cfg" | head -1)
+    if [ -n "$lat" ] && [ -n "$lon" ]; then
+      grn "position: $lat, $lon  ($cfg)"
+      return
+    fi
+  done
+  dim "position: not set — ./sdr setpos <lat> <lon>"
+}
+
+cmd_status() {
+  local node tool pid
+  if node=$(radio_node); then
+    if [ -w "$node" ]; then
+      grn "radio: ready ($node)"
+    else
+      red "radio: present but not writable ($node) — run ./sdr status for the fix"
+      dim "  sudo udevadm control --reload-rules && sudo udevadm trigger --action=add --subsystem-match=usb"
+    fi
+  else
+    red "radio: not attached"
+  fi
+
+  show_position
+  show_url
+
+  for tool in "${TOOLS[@]}"; do
+    if pid=$(running_pid "$tool"); then
+      grn "$tool: running (pid $pid)"
+    else
+      dim "$tool: stopped"
+    fi
+  done
+
+  local holder; holder=$(radio_holder)
+  if [ -n "$holder" ]; then
+    dim "processes holding the radio:"
+    sed 's/^/  /' <<<"$holder" | while read -r l; do dim "$l"; done
+  fi
+}
+
+cmd_logs() {
+  local tool="${1:-}"
+  if [ -z "$tool" ]; then
+    for t in "${TOOLS[@]}"; do running_pid "$t" >/dev/null && tool="$t" && break; done
+  fi
+  [ -n "$tool" ] || die "nothing running; say which log: ./sdr logs tpms"
+  local lf; lf=$(logfile "$tool")
+  [ -f "$lf" ] || die "no log at $lf"
+  tail -f -n 40 "$lf"
+}
+
+# choose presents the receivers rather than defaulting to one, so starting
+# the radio is always a deliberate choice. The mode says what to do with
+# the answer: "run" in the foreground, or "start" in the background, so
+# `./sdr` and `./sdr start` can ask the same question.
+choose() {
+  local mode="${1:-run}"
+  if [ ! -t 0 ]; then usage; exit 0; fi
+  local pid
+  if [ "$mode" = start ]; then
+    echo "Which receiver do you want to start in the background?"
+  else
+    echo "Which receiver do you want to start?"
+  fi
+  echo
+  for t in "${TOOLS[@]}"; do
+    local state="stopped"
+    pid=$(running_pid "$t") && state="RUNNING (pid $pid)"
+    case "$t" in
+      hub)     printf '  0) hub      every receiver, with tabs   [%s]\n' "$state" ;;
+      adsb)    printf '  1) adsb     aircraft, 1090 MHz          [%s]\n' "$state" ;;
+      uat)     printf '  5) uat      aircraft, 978 MHz (US)      [%s]\n' "$state" ;;
+      tpms)    printf '  2) tpms     tyre sensors, 315/433 MHz   [%s]\n' "$state" ;;
+      scanner) printf '  3) scanner  sweep the spectrum          [%s]\n' "$state" ;;
+      fm)      printf '  4) fm       listen to broadcast FM      [%s]\n' "$state" ;;
+    esac
+  done
+  printf '  q) quit\n\n'
+  local ans tool
+  read -r -p "choice: " ans
+  case "$ans" in
+    0|hub|"")  tool=hub ;;
+    1|adsb)    tool=adsb ;;
+    2|tpms)    tool=tpms ;;
+    3|scanner) tool=scanner ;;
+    4|fm)      tool=fm ;;
+    5|uat)     tool=uat ;;
+    q|Q)    dim "nothing started"; exit 0 ;;
+    *)      die "not a choice: $ans" ;;
+  esac
+  if [ "$mode" = start ]; then cmd_start "$tool"; else cmd_run "$tool"; fi
+}
+
+usage() {
+  # Print the header comment, stopping at the first line that is not one.
+  awk 'NR>2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
+}
+
+# rewrite_args turns a bare frequency after "fm" into -freq, so
+# `./sdr fm 98.7` and `./sdr start fm 98.7` mean the same thing. The
+# result is left in ARGV because an array cannot be returned.
+ARGV=()
+rewrite_args() {
+  local tool="$1"; shift
+  ARGV=()
+  if [ "$tool" = fm ] && [ $# -ge 1 ] && [[ "$1" =~ ^[0-9] ]]; then
+    ARGV=(-freq "$1"); shift
+  fi
+  ARGV+=("$@")
+}
+
+main() {
+  # -y may appear anywhere; strip it before working out the command.
+  local args=() a
+  for a in "$@"; do
+    case "$a" in
+      -y|--yes|--force) FORCE=1 ;;
+      *) args+=("$a") ;;
+    esac
+  done
+  set -- "${args[@]+"${args[@]}"}"
+
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    hub|web)     cmd_run hub "$@" ;;
+    adsb|uat|tpms|scanner|fm)
+                 rewrite_args "$cmd" "$@"
+                 cmd_run "$cmd" "${ARGV[@]+"${ARGV[@]}"}" ;;
+    # With no tool named, ask — the same question `./sdr` asks, but the
+    # answer runs in the background.
+    start)       if [ $# -eq 0 ]; then
+                   choose start
+                 else
+                   local t="$1"; shift
+                   rewrite_args "$t" "$@"
+                   cmd_start "$t" "${ARGV[@]+"${ARGV[@]}"}"
+                 fi ;;
+    stop)        cmd_stop ;;
+    status)      cmd_status ;;
+    logs)        cmd_logs "$@" ;;
+    setpos)      cmd_setpos "$@" ;;
+    alerts)      cmd_alerts "$@" ;;
+    alerts-example) cmd_alerts_example "$@" ;;
+    build)       if [ $# -gt 0 ]; then cross_build "$1"; else build --force; fi ;;
+    "")          cmd_run hub ;;
+    -h|--help|help) usage ;;
+    *)           die "unknown command: $cmd (try ./sdr --help)" ;;
+  esac
+}
+
+main "$@"

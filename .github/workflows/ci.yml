@@ -1,0 +1,38 @@
+# Build, vet and test on every push. There are no third-party Go
+# dependencies and no cgo, so this needs nothing but the toolchain.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # The tests that need a dongle skip unless SDR_HARDWARE is set, so
+      # everything else — including the handover between receivers, which
+      # runs against a fake rtl_tcp — runs here.
+      - name: Test
+        run: go test -race ./...
+
+      # Every receiver is meant to run on the machines people have, and a
+      # build tag that only compiles on Linux is easy to add by accident.
+      - name: Cross-compile
+        run: |
+          for target in windows/amd64 darwin/amd64 darwin/arm64 linux/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./... \
+              && echo "  ok  $target"
+          done

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FM Receiver</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#f0883e; --bad:#f85149;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:24px 16px; background:var(--bg); color:var(--fg);
+    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:18px;
+  }
+  .card {
+    width:100%; max-width:560px; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; padding:20px;
+  }
+  h1 { margin:0 0 16px; font-size:14px; font-weight:600; color:var(--dim);
+       text-transform:uppercase; letter-spacing:.8px; }
+
+  .dial { display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:6px; }
+  .freq { font-size:52px; font-weight:650; font-variant-numeric:tabular-nums; line-height:1; }
+  .unit { color:var(--dim); font-size:15px; align-self:flex-end; padding-bottom:8px; }
+  .step {
+    background:#21262d; color:var(--fg); border:1px solid var(--line); border-radius:9px;
+    width:42px; height:42px; font-size:20px; cursor:pointer; line-height:1;
+  }
+  .step:hover { border-color:var(--accent); color:var(--accent); }
+
+  .meter { height:6px; background:#0b0f14; border-radius:3px; overflow:hidden; margin:14px 0 4px; }
+  .meter i { display:block; height:100%; width:0;
+             background:linear-gradient(90deg,#1f6feb,#3fb950); transition:width .25s; }
+  .meterlbl { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
+
+  .controls { display:flex; gap:10px; align-items:center; margin-top:18px; flex-wrap:wrap; }
+  #play {
+    background:#1f6feb; color:#fff; border:0; border-radius:9px; padding:11px 22px;
+    font:inherit; font-weight:650; cursor:pointer;
+  }
+  #play:hover { background:#2b7ef5; }
+  #play.on { background:#21262d; color:var(--fg); border:1px solid var(--line); }
+  input[type=range] { flex:1; min-width:120px; accent-color:var(--accent); }
+  .vol { color:var(--dim); font-size:12px; }
+
+  .presets { display:flex; flex-wrap:wrap; gap:6px; }
+  .presets button {
+    background:#21262d; color:var(--fg); border:1px solid var(--line); border-radius:7px;
+    padding:6px 11px; font:inherit; font-size:13px; font-variant-numeric:tabular-nums; cursor:pointer;
+  }
+  .presets button:hover { border-color:var(--accent); color:var(--accent); }
+  .presets button.on { background:#1f6feb; border-color:#1f6feb; color:#fff; font-weight:600; }
+
+  .row { display:flex; gap:8px; align-items:center; margin-top:12px; }
+  .row input[type=number] {
+    width:110px; background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 9px; font:inherit; font-variant-numeric:tabular-nums;
+  }
+  .row button {
+    background:#21262d; color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 13px; font:inherit; cursor:pointer;
+  }
+  #msg { color:var(--bad); font-size:12px; min-height:16px; }
+  #status { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>FM Receiver</h1>
+  <div class="dial">
+    <button class="step" id="down" title="down 0.2 MHz">−</button>
+    <span class="freq" id="freq">—</span><span class="unit">MHz</span>
+    <button class="step" id="up" title="up 0.2 MHz">+</button>
+  </div>
+
+  <div class="meter"><i id="bar"></i></div>
+  <div class="meterlbl"><span>signal</span><span id="lvl">—</span></div>
+
+  <div class="controls">
+    <button id="play">▶ Listen</button>
+    <span class="vol">vol</span>
+    <input type="range" id="vol" min="0" max="100" value="70">
+  </div>
+
+  <div class="row">
+    <input type="number" id="manual" step="0.1" min="87.5" max="108" placeholder="98.7">
+    <button id="go">Tune</button>
+    <span id="status"></span>
+  </div>
+  <div id="msg"></div>
+</div>
+
+<div class="card">
+  <h1>Stations found here</h1>
+  <div class="presets" id="presets"></div>
+</div>
+
+<audio id="audio" hidden></audio>
+
+<script>
+const $ = id => document.getElementById(id);
+const audio = $('audio');
+
+// Frequencies the scanner actually detected at this location, strongest
+// first. US channels are spaced 200 kHz apart on odd tenths.
+const STATIONS = [98.7, 102.9, 105.3, 101.3, 95.7, 105.7, 94.5, 97.5,
+                  107.3, 106.9, 104.5, 100.5, 91.1, 96.9];
+
+let current = null, playing = false;
+
+const fmt = mhz => mhz.toFixed(1);
+
+function renderPresets() {
+  $('presets').replaceChildren(...STATIONS.map(f => {
+    const b = document.createElement('button');
+    b.textContent = fmt(f);
+    b.dataset.f = f;
+    b.onclick = () => tune(f);
+    return b;
+  }));
+}
+
+function markActive() {
+  for (const b of $('presets').children) {
+    b.classList.toggle('on', Math.abs(parseFloat(b.dataset.f) - current) < 0.05);
+  }
+}
+
+async function tune(mhz) {
+  $('msg').textContent = '';
+  try {
+    const r = await fetch('/api/tune', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({freq_hz: Math.round(mhz * 1e6)}),
+    });
+    if (!r.ok) { $('msg').textContent = (await r.text()).trim(); return; }
+    const d = await r.json();
+    current = d.freq_hz / 1e6;
+    $('freq').textContent = fmt(current);
+    markActive();
+  } catch (e) {
+    $('msg').textContent = 'receiver offline';
+  }
+}
+
+// The stream is one long WAV; starting it once and leaving it open means
+// retuning is seamless, with no gap while a new connection is made.
+function start() {
+  audio.src = '/audio.wav?t=' + Date.now();
+  audio.volume = $('vol').value / 100;
+  audio.play().then(() => {
+    playing = true;
+    $('play').textContent = '⏸ Stop';
+    $('play').classList.add('on');
+  }).catch(err => {
+    $('msg').textContent = 'browser refused to play: ' + err.message;
+  });
+}
+
+function stop() {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  playing = false;
+  $('play').textContent = '▶ Listen';
+  $('play').classList.remove('on');
+}
+
+$('play').onclick = () => playing ? stop() : start();
+$('vol').oninput = () => { audio.volume = $('vol').value / 100; };
+$('up').onclick = () => current != null && tune(Math.min(108, current + 0.2));
+$('down').onclick = () => current != null && tune(Math.max(87.5, current - 0.2));
+$('go').onclick = () => {
+  const v = parseFloat($('manual').value);
+  if (isFinite(v)) tune(v);
+};
+$('manual').addEventListener('keydown', e => { if (e.key === 'Enter') $('go').click(); });
+
+async function poll() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    if (current === null) {
+      current = d.freq_hz / 1e6;
+      $('freq').textContent = fmt(current);
+      $('manual').placeholder = fmt(current);
+      markActive();
+    }
+    // The discriminator's output is bounded by the deviation, so the
+    // peak maps onto a meter without needing calibration.
+    const pct = Math.max(0, Math.min(100, d.level * 130));
+    $('bar').style.width = pct + '%';
+    $('lvl').textContent = d.level.toFixed(2);
+    $('status').textContent = d.listeners > 0 ? `${d.listeners} listening` : '';
+  } catch (e) {
+    $('status').textContent = 'receiver offline';
+  }
+}
+
+renderPresets();
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

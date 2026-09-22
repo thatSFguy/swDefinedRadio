@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDR</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#f0883e; --bad:#f85149;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+
+  /* An author rule setting display beats the browser's own rule for
+     [hidden], so anything given a display below would ignore the
+     attribute entirely — the idle panel sat on top of a working page,
+     and the frame beneath it was never really hidden. */
+  [hidden] { display:none !important; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:13px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    display:flex; flex-direction:column;
+  }
+
+  header {
+    display:flex; align-items:center; gap:4px; padding:0 12px;
+    background:var(--panel); border-bottom:1px solid var(--line);
+    flex:0 0 auto; flex-wrap:wrap;
+  }
+  #tabs { display:flex; flex-wrap:wrap; }
+
+  .brand {
+    font-weight:650; letter-spacing:.5px; color:var(--dim);
+    padding:10px 10px 10px 2px; font-size:12px; text-transform:uppercase;
+  }
+
+  .tab {
+    background:none; border:0; border-bottom:2px solid transparent;
+    color:var(--dim); font:inherit; padding:11px 13px 9px; cursor:pointer;
+    display:flex; align-items:baseline; gap:7px; white-space:nowrap;
+  }
+  .tab:hover { color:var(--fg); }
+  .tab.on { color:var(--fg); border-bottom-color:var(--accent); }
+  .tab .band { font-size:11px; color:var(--dim); }
+  .tab.on .band { color:var(--accent); }
+  .tab:disabled { opacity:.5; cursor:default; }
+  .tab .dot {
+    width:6px; height:6px; border-radius:50%; background:var(--ok);
+    display:inline-block; margin-right:1px;
+  }
+
+  .spacer { flex:1; }
+  .status { color:var(--dim); font-size:11px; padding:0 4px; white-space:nowrap; }
+  .status b { color:var(--fg); font-variant-numeric:tabular-nums; }
+  .stop {
+    background:#21262d; color:var(--dim); border:1px solid var(--line);
+    border-radius:6px; font:inherit; font-size:11px; padding:4px 10px;
+    cursor:pointer; margin:0 0 0 8px;
+  }
+  .stop:hover:not(:disabled) { color:var(--bad); border-color:var(--bad); }
+  .stop:disabled { opacity:.4; cursor:default; }
+
+  #banner {
+    padding:8px 14px; font-size:12px; border-bottom:1px solid var(--line);
+    background:#1c2230; color:var(--dim); flex:0 0 auto;
+  }
+  #banner.bad { background:#2d1417; color:var(--bad); }
+  #banner .spin {
+    display:inline-block; width:9px; height:9px; margin-right:7px;
+    border:2px solid var(--line); border-top-color:var(--accent);
+    border-radius:50%; animation:spin .7s linear infinite; vertical-align:-1px;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  main { flex:1; position:relative; min-height:0; }
+  iframe { width:100%; height:100%; border:0; display:block; background:var(--bg); }
+  #idle {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:10px; color:var(--dim);
+    text-align:center; padding:20px;
+  }
+  #idle h2 { margin:0; font-size:15px; font-weight:600; color:var(--fg); }
+  #idle p { margin:0; max-width:34em; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">SDR</span>
+  <nav id="tabs"></nav>
+  <span class="spacer"></span>
+  <span class="status" id="radio"></span>
+  <button class="stop" id="stop" disabled>release radio</button>
+</header>
+
+<div id="banner" hidden></div>
+
+<main>
+  <iframe id="frame" hidden title="receiver"></iframe>
+  <div id="idle">
+    <h2>Nothing is on the air</h2>
+    <p>Pick a receiver above. Only one can use the radio at a time — there is
+       one tuner — so choosing a tab takes the radio off whichever had it.</p>
+  </div>
+</main>
+
+<script>
+const $tabs = document.getElementById('tabs');
+const $frame = document.getElementById('frame');
+const $idle = document.getElementById('idle');
+const $banner = document.getElementById('banner');
+const $radio = document.getElementById('radio');
+const $stop = document.getElementById('stop');
+
+let tabs = [];          // what the hub offers
+let shown = null;       // which receiver the frame is currently showing
+let pending = null;     // a tab we asked for and are waiting on
+let timer = null;
+
+// Switching is deliberate, so the click blanks the frame before asking.
+// That ends the old page's document and cancels the polls it had in
+// flight, which is what stops a stale answer arriving for a receiver that
+// no longer has the radio.
+async function select(id) {
+  if (pending) return;
+  pending = id;
+  blank();
+  render();
+  try {
+    const r = await fetch('/hub/select?id=' + encodeURIComponent(id), { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    pending = null;
+    fail(String(e.message || e));
+    return;
+  }
+  poll(200);
+}
+
+async function stop() {
+  blank();
+  try { await fetch('/hub/stop', { method: 'POST' }); } catch (e) { /* the poll will show it */ }
+  poll(200);
+}
+
+function blank() {
+  shown = null;
+  $frame.hidden = true;
+  $frame.removeAttribute('src');
+}
+
+function fail(msg) {
+  $banner.hidden = false;
+  $banner.className = 'bad';
+  $banner.textContent = msg;
+}
+
+function nameOf(id) {
+  const t = tabs.find(t => t.id === id);
+  return t ? t.title : id;
+}
+
+function render(st) {
+  if (st) tabs = st.tabs || [];
+  const active = st ? st.active : null;
+  const phase = st ? st.phase : 'idle';
+  const busy = phase === 'stopping' || phase === 'arming' || pending !== null;
+
+  if ($tabs.childElementCount !== tabs.length) {
+    $tabs.replaceChildren(...tabs.map(t => {
+      const b = document.createElement('button');
+      b.className = 'tab';
+      b.dataset.id = t.id;
+      b.innerHTML = '<span class="dot" hidden></span><span></span>' +
+                    '<span class="band"></span>';
+      b.children[1].textContent = t.title;
+      b.children[2].textContent = t.band;
+      b.onclick = () => select(t.id);
+      return b;
+    }));
+  }
+  for (const b of $tabs.children) {
+    const on = b.dataset.id === active && phase === 'on_air';
+    b.classList.toggle('on', on);
+    b.children[0].hidden = !on;
+    b.disabled = busy;
+  }
+
+  $stop.disabled = busy || !active;
+
+  if (!st) return;
+
+  if (phase === 'failed' && st.error) {
+    fail(st.error);
+  } else if (busy) {
+    const who = nameOf(st.target || pending || active);
+    $banner.hidden = false;
+    $banner.className = '';
+    $banner.innerHTML = '<span class="spin"></span>' +
+      (phase === 'stopping' ? 'Taking the radio off ' + nameOf(active)
+                            : 'Re-arming the radio for ' + who) + '…';
+  } else {
+    $banner.hidden = true;
+  }
+
+  const r = st.radio || {};
+  const rate = r.sample_rate;
+  $radio.innerHTML = r.running
+    ? 'radio <b>' + (rate ? (rate / 1e6).toFixed(3) + ' Msps' : 'idle') + '</b>'
+    : 'radio <b>stopped</b>';
+
+  document.title = active && phase === 'on_air' ? nameOf(active) + ' · SDR' : 'SDR';
+
+  // Only show the frame once the receiver is actually on the air, so the
+  // page never draws itself against a radio it has not been given yet.
+  if (phase === 'on_air' && active) {
+    if (shown !== active) {
+      shown = active;
+      pending = null;
+      $frame.src = '/app/' + active + '/';
+      $frame.hidden = false;
+    }
+    $idle.hidden = true;
+  } else if (!active) {
+    if (shown !== null) blank();
+    pending = phase === 'arming' || phase === 'stopping' ? pending : null;
+    $idle.hidden = busy;
+  }
+}
+
+async function tick() {
+  try {
+    const r = await fetch('/hub/state');
+    const st = await r.json();
+    render(st);
+    // Poll hard while something is happening, gently when it is not.
+    poll(st.phase === 'stopping' || st.phase === 'arming' ? 200 : 1000);
+  } catch (e) {
+    poll(2000);
+  }
+}
+
+function poll(ms) {
+  clearTimeout(timer);
+  timer = setTimeout(tick, ms);
+}
+
+render();
+tick();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# Built binaries.
+/bin/
+# Stray `go build` output, which lands in the working directory.
+/hub
+/adsb
+/uat
+/tpms
+/scanner
+/fm
+
+# Runtime state rather than settings worth sharing. data/ also holds
+# TPMS readings, which are other people's vehicles going past.
+/logs/
+/data/
+
+# Your own antenna position, and your own alert rules. The position is
+# where you live, so it stays out of the repository; copy
+# config.example.json and run ./sdr setpos.
+/config.json
+/alerts.json
+
+# Raw IQ captures: large, and a recording of a place and time.
+*.iq
+
+# Cross-compiled binaries, built on demand by ./sdr build <os>.
+/dist/

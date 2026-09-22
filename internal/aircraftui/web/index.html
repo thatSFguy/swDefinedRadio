@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS-B Receiver</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --warn: #f0883e;
+    --alert: #d29922; --bad: #f85149;
+    /* The map itself: sea, land, and the lines drawn over them. */
+    --sea: #0a0f16; --land: #1c242f; --coast: #5c6878; --border: #6d7a8b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  #map { flex: 1; min-width: 0; background: var(--sea); }
+  .leaflet-container { background: var(--sea); }
+  /* Street tiles are drawn for a white page; invert them so they sit
+     next to a dark panel. The stored map is already dark and is left
+     alone. */
+  /* className goes on the layer container, not on each tile, so the
+     filter has to be applied from there. */
+  .street .leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.92); }
+  /* City names, drawn as labels rather than markers. */
+  .place {
+    color: #7d8590; font-size: 10px; letter-spacing: .2px; white-space: nowrap;
+    text-shadow: 0 0 3px #0d1117, 0 0 3px #0d1117; pointer-events: none;
+  }
+  .place.big { color: #b3bdc9; font-size: 11px; }
+  /* UAT ground stations: fixed transmitters, not traffic. */
+  .gs {
+    color: #3fb950; font-size: 11px; font-weight: 600; white-space: nowrap;
+    text-shadow: 0 0 3px #0d1117, 0 0 3px #0d1117; pointer-events: none;
+    transform: translate(-14px, -7px);
+  }
+  /* Airports: a dot at the position with the code beside it. This is
+     what most of the traffic is going to or coming from, so it reads a
+     little brighter than a city name. */
+  .apt {
+    display: flex; align-items: center; gap: 3px; white-space: nowrap;
+    color: #7fa8cc; font-size: 10px; font-weight: 600; letter-spacing: .3px;
+    text-shadow: 0 0 3px #0d1117, 0 0 3px #0d1117; pointer-events: none;
+    transform: translate(4px, -6px);
+  }
+  .apt::before {
+    content: ''; width: 5px; height: 5px; flex: none;
+    border: 1px solid currentColor; border-radius: 50%;
+    transform: translate(-6px, 6px); margin-right: -5px;
+  }
+  /* Military fields, in the same amber the alerts use. */
+  .apt.mil { color: var(--alert); }
+
+  aside {
+    width: 460px; display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--line);
+  }
+  header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0 0 8px; font-size: 14px; font-weight: 600; letter-spacing: .3px; }
+  #stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
+  #stats b { color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 600; }
+  #stale { color: var(--warn); }
+  /* The receiver's own position, and the button that sets it. */
+  #pos { display: flex; align-items: center; gap: 8px; margin-top: 6px;
+         color: var(--dim); font-size: 12px; flex-wrap: wrap; }
+  #pos-text { font-variant-numeric: tabular-nums; }
+  #pos button {
+    background: none; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--dim); font: inherit; font-size: 11px; padding: 1px 7px; cursor: pointer;
+  }
+  #pos button:hover:not(:disabled) { color: var(--fg); border-color: var(--dim); }
+  #pos button:disabled { opacity: .6; cursor: default; }
+  #pos-note { font-size: 11px; }
+  #pos-note.bad { color: var(--bad); }
+  #pos-note.warn { color: var(--warn); }
+  #pos-note.ok { color: var(--ok, #3fb950); }
+
+  .wrap { flex: 1; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; text-align: right; white-space: nowrap; }
+  th {
+    position: sticky; top: 0; background: var(--panel); z-index: 1;
+    border-bottom: 1px solid var(--line); color: var(--dim);
+    font-size: 11px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: .5px; cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--fg); }
+  th[data-dir]::after { content: attr(data-dir); margin-left: 3px; color: var(--accent); }
+  td:first-child, th:first-child { text-align: left; }
+  td:nth-child(2), th:nth-child(2) { text-align: left; }
+  tbody tr { border-bottom: 1px solid #21262d; cursor: pointer; }
+  tbody tr:hover { background: #1c2230; }
+  tbody tr.sel { background: #1f3350; }
+  .hex { color: var(--dim); font-family: ui-monospace, SFMono-Regular, monospace; }
+  .call { font-weight: 600; }
+  .nopos { opacity: .5; }
+  .up { color: #3fb950; } .down { color: #f85149; }
+  #empty { padding: 30px 14px; color: var(--dim); text-align: center; }
+
+  /* Alerts. The panel only appears once something has been raised, so
+     an ordinary afternoon of airliners looks exactly as it did. */
+  #alerts { border-bottom: 1px solid var(--line); background: #12161d; }
+  .ahead {
+    display: flex; align-items: center; gap: 8px; padding: 7px 14px;
+    color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .ahead b { color: var(--alert); font-weight: 600; }
+  .ahead .sp { flex: 1; }
+  .ahead button {
+    background: none; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--dim); font: inherit; font-size: 11px; padding: 1px 7px; cursor: pointer;
+  }
+  .ahead button:hover { color: var(--fg); border-color: var(--dim); }
+  .ahead button[aria-pressed="true"] { color: var(--alert); border-color: var(--alert); }
+  #alist { list-style: none; margin: 0; padding: 0; max-height: 148px; overflow-y: auto; }
+  #alist li {
+    display: flex; gap: 8px; align-items: baseline; cursor: pointer;
+    padding: 4px 14px; border-top: 1px solid #1b212b; font-size: 12px;
+  }
+  #alist li:hover { background: #1c2230; }
+  #alist .t { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+  #alist .r { color: var(--alert); }
+  #alist li.urgent .r { color: var(--bad); font-weight: 600; }
+  #alist .w { color: var(--fg); font-weight: 600; }
+  #alist .d { color: var(--dim); flex: 1; text-align: right; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; }
+  tbody tr.flag { background: #2a2213; }
+  tbody tr.flag:hover { background: #342a17; }
+  tbody tr.flag.urgent { background: #351a1a; }
+  tbody tr.flag .call { color: var(--alert); }
+  tbody tr.flag.urgent .call { color: var(--bad); }
+  /* A ring around a flagged aircraft, so it is findable on the map
+     without reading every label. */
+  .ring { animation: pulse 2s ease-out infinite; transform-origin: center; }
+  @keyframes pulse {
+    0%   { r: 12px; opacity: .9; }
+    100% { r: 22px; opacity: 0; }
+  }
+
+  .plane { transition: transform .4s linear; transform-origin: center; }
+  .lbl {
+    background: rgba(13,17,23,.82); border: 1px solid var(--line); border-radius: 3px;
+    padding: 1px 4px; font-size: 11px; color: var(--fg); white-space: nowrap;
+  }
+  @media (max-width: 900px) {
+    body { flex-direction: column; }
+    aside { width: 100%; height: 45%; border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside>
+  <header>
+    <h1>ADS-B Receiver</h1>
+    <div id="stats">
+      <span>Aircraft <b id="s-n">0</b></span>
+      <span>Positioned <b id="s-p">0</b></span>
+      <span>Rate <b id="s-r">0</b>/s</span>
+      <span>Frames <b id="s-f">0</b></span>
+      <span id="band"></span>
+      <span id="ground"></span>
+      <span id="stale"></span>
+    </div>
+    <div id="pos">
+      <span id="pos-text">…</span>
+      <button id="locate" hidden
+        title="Set the receiver's position from this browser. Only useful if the browser is at the antenna.">Use my location</button>
+      <span id="pos-note"></span>
+    </div>
+  </header>
+  <section id="alerts" hidden>
+    <div class="ahead">
+      <span>Alerts <b id="a-n">0</b></span>
+      <span class="sp"></span>
+      <button id="sound" aria-pressed="false" title="beep when something urgent appears">Sound</button>
+      <button id="notify" aria-pressed="false" title="desktop notification for urgent alerts">Notify</button>
+      <button id="aclear" title="clear the list">Clear</button>
+    </div>
+    <ul id="alist"></ul>
+  </section>
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th data-k="callsign">Flight</th>
+        <th data-k="hex">ICAO</th>
+        <th data-k="altitude">Alt ft</th>
+        <th data-k="speed">Kts</th>
+        <th data-k="track">Trk</th>
+        <th data-k="distance_nm">NM</th>
+        <th data-k="messages">Msgs</th>
+        <th data-k="age">Age</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty">Waiting for aircraft…</div>
+  </div>
+</aside>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: true, worldCopyJump: true }).setView([40, -95], 6);
+// The map is drawn from vector data shipped inside this binary —
+// coastlines, borders, state lines, big lakes and cities — rather than
+// fetched as tiles from somebody else's server. It is coarse on
+// purpose: aircraft at 35,000 ft need to know which state they are
+// over, not which street. Nothing here touches the network, so it
+// works the same on a plane as it does at home.
+// Leaflet sets stroke and fill as SVG attributes, and a CSS variable
+// does not resolve there, so these are the literal counterparts of the
+// --sea/--land/--coast/--border custom properties above.
+const MAP = { sea: '#0a0f16', land: '#1c242f', coast: '#5c6878', border: '#6d7a8b', state: '#4b5666' };
+const bm = { places: [] };
+
+// The stored map is a layer group so the selector can swap the whole
+// thing — shapes and labels together — for the online street map.
+const stored = L.layerGroup().addTo(map);
+const labels = L.layerGroup().addTo(stored);
+
+fetch('basemap.json').then(r => r.json()).then(drawBasemap)
+  .catch(e => console.warn('basemap:', e));
+fetch('/api/map').then(r => r.json()).then(addSelector)
+  .catch(e => console.warn('map options:', e));
+
+function drawBasemap(d) {
+  const pane = map.createPane('basemap');
+  pane.style.zIndex = 350;                 // under the aircraft, over the sea
+  // 25,000 vertices as individual SVG paths would make every pan
+  // stutter; on a canvas the whole basemap is one element.
+  const opt = { pane: 'basemap', interactive: false,
+                renderer: L.canvas({ pane: 'basemap', padding: .3 }) };
+
+  // Fills first and unstroked: a filled polygon clipped to the canvas
+  // can have the clip edge stroked along with it, so the outlines come
+  // separately from the coast layer, which is the same shapes drawn as
+  // lines. (The straight lines across Lake Michigan are not a drawing
+  // fault — state boundaries really do run through the water.)
+  const fill = { ...opt, stroke: false, fillOpacity: 1 };
+  for (const ring of d.land) {
+    L.polygon(ring, { ...fill, fillColor: MAP.land }).addTo(stored);
+  }
+  for (const ring of d.lakes) {
+    L.polygon(ring, { ...fill, fillColor: MAP.sea }).addTo(stored);
+  }
+  for (const line of d.coast) {
+    L.polyline(line, { ...opt, color: MAP.coast, weight: 1 }).addTo(stored);
+  }
+  for (const line of d.borders) {
+    L.polyline(line, { ...opt, color: MAP.border, weight: 1 }).addTo(stored);
+  }
+  for (const line of d.states) {
+    L.polyline(line, { ...opt, color: MAP.state, weight: .8 }).addTo(stored);
+  }
+
+  // Cities and airports are labels, not shapes, and only as many as
+  // the zoom can carry: every one of them at zoom 3 is an unreadable
+  // smear. Airports show a level earlier than cities of the same rank,
+  // since they are what the traffic is actually doing.
+  bm.places = d.places.map(p => mapLabel(p.p, p.r + 3,
+    `<div class="place${p.r <= 2 ? ' big' : ''}">${esc(p.n)}</div>`));
+  bm.places.push(...(d.airports || []).map(a => mapLabel(a.p, a.r,
+    `<div class="apt${a.m ? ' mil' : ''}" title="${esc(a.n)}">${esc(a.c)}</div>`)));
+  showPlaces();
+}
+
+// mapLabel makes one non-interactive map label that appears at zoom
+// `at`. Not `label`: that name belongs to the aircraft tooltip below,
+// and a second declaration of it silently wins for the whole file.
+function mapLabel(at_ll, at, html) {
+  const m = L.marker(at_ll, {
+    pane: 'basemap', interactive: false,
+    icon: L.divIcon({ className: '', iconSize: [0, 0], html }),
+  });
+  m._at = at;
+  return m;
+}
+
+// Names come from a data file rather than the air, but they are still
+// put into HTML, so they are escaped like anything else would be.
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// A label is shown once the map is zoomed in far enough for it, and
+// only while it is on screen: these are DOM elements, and every one of
+// the two thousand is neither useful nor fast.
+function showPlaces() {
+  const z = map.getZoom(), view = map.getBounds();
+  for (const m of bm.places) {
+    const want = m._at <= z && view.contains(m.getLatLng());
+    if (want && !labels.hasLayer(m)) labels.addLayer(m);
+    else if (!want && labels.hasLayer(m)) labels.removeLayer(m);
+  }
+}
+map.on('zoomend moveend', showPlaces);
+
+// addSelector offers the choice between the map stored in this binary
+// and a street map from a tile server. The stored one is the default
+// and the fallback: it is the one that works with no network, and the
+// online one is somebody else's server, reached directly by the
+// browser the way any Leaflet page does.
+function addSelector(opts) {
+  const bases = { 'Stored map': stored };
+  if (opts && opts.tile_url) {
+    bases['Street map (online)'] = L.tileLayer(opts.tile_url, {
+      maxZoom: 18, attribution: '&copy; OpenStreetMap',
+      className: 'street',   // inverted by CSS: the raw tiles are far too bright here
+    });
+  }
+  L.control.layers(bases, null, { position: 'topleft' }).addTo(map);
+
+  // Remember the choice, so a preference survives a reload. ?map=
+  // overrides it, which makes the choice bookmarkable.
+  const asked = new URLSearchParams(location.search).get('map');
+  const saved = (asked === 'street' ? 'Street map (online)' :
+                 asked === 'stored' ? 'Stored map' : null) ||
+                recall('basemap');
+  if (saved && bases[saved] && !map.hasLayer(bases[saved])) {
+    for (const l of Object.values(bases)) map.removeLayer(l);
+    bases[saved].addTo(map);
+  }
+  map.on('baselayerchange', e => remember('basemap', e.name));
+}
+
+const state = new Map();   // hex -> { marker, trail, latlng[] }
+let selected = null, sortKey = 'distance_nm', sortDir = 1, autoFit = true;
+
+// Once the user moves the map, stop pulling it back to fit the traffic.
+map.on('dragstart zoomstart', () => { autoFit = false; });
+
+// Altitude bands, low to high. Colouring by altitude makes arrival and
+// departure streams pop out from overflights at a glance.
+const BANDS = [
+  [0,     '#f85149'], [5000,  '#f0883e'], [10000, '#d29922'],
+  [20000, '#3fb950'], [30000, '#58a6ff'], [40000, '#bc8cff'],
+];
+function colour(alt) {
+  if (alt == null) return '#8b949e';
+  let c = BANDS[0][1];
+  for (const [floor, col] of BANDS) if (alt >= floor) c = col;
+  return c;
+}
+
+function icon(a) {
+  const c = colour(a.has_altitude ? a.altitude : null);
+  const rot = a.has_track ? a.track : 0;
+  // A simple top-down silhouette; rotate it to the reported track.
+  return L.divIcon({
+    className: '', iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<svg class="plane" width="26" height="26" viewBox="0 0 24 24"
+             style="transform:rotate(${rot}deg)">
+             <path d="M12 1.6 13.5 9 22.5 13.6v2L13.5 13l-.6 5.6 3.3 2.2v1.4L12 21l-4.2 1.2v-1.4l3.3-2.2L10.5 13 1.5 15.6v-2L10.5 9Z"
+                   fill="${c}" stroke="#0d1117" stroke-width=".7"/>
+           </svg>`
+  });
+}
+
+function label(a) {
+  const name = a.callsign || a.hex.toUpperCase();
+  const alt = a.has_altitude ? Math.round(a.altitude / 100).toString().padStart(3, '0') : '---';
+  return `${name} · FL${alt}`;
+}
+
+function render(data) {
+  const now = new Date(data.now).getTime();
+  const seen = new Set();
+  const bounds = [];
+
+  for (const a of data.aircraft) {
+    if (!a.has_position) continue;
+    seen.add(a.hex);
+    const ll = [a.lat, a.lon];
+    bounds.push(ll);
+
+    let s = state.get(a.hex);
+    if (!s) {
+      s = {
+        marker: L.marker(ll, { icon: icon(a) }).addTo(map),
+        trail: L.polyline([ll], { color: colour(a.altitude), weight: 1.5, opacity: .45 }).addTo(map),
+        pts: [ll],
+      };
+      s.marker.bindTooltip(label(a), { permanent: true, direction: 'right',
+                                       offset: [11, 0], className: 'lbl' });
+      s.marker.on('click', () => select(a.hex, true));
+      state.set(a.hex, s);
+    } else {
+      s.marker.setLatLng(ll);
+      s.marker.setIcon(icon(a));
+      s.marker.setTooltipContent(label(a));
+      const last = s.pts[s.pts.length - 1];
+      if (last[0] !== a.lat || last[1] !== a.lon) {
+        s.pts.push(ll);
+        if (s.pts.length > 200) s.pts.shift();
+        s.trail.setLatLngs(s.pts);
+        s.trail.setStyle({ color: colour(a.altitude) });
+      }
+    }
+    ring(s, a.hex, ll);
+  }
+
+  // Drop anything the server has forgotten.
+  for (const [hex, s] of state) {
+    if (!seen.has(hex)) {
+      map.removeLayer(s.marker); map.removeLayer(s.trail); state.delete(hex);
+      if (selected === hex) selected = null;
+    }
+  }
+
+  if (autoFit && bounds.length) {
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+    if (bounds.length > 1) autoFit = false;   // settle after the first real fix
+  }
+
+  table(data.aircraft, now);
+  stats(data.stats);
+}
+
+function stats(s) {
+  document.getElementById('s-n').textContent = s.tracked;
+  document.getElementById('s-p').textContent = s.with_position;
+  document.getElementById('s-f').textContent = s.frames.toLocaleString();
+  const dt = (Date.now() - stats.t) / 1000;
+  if (stats.f != null && dt > 0) {
+    document.getElementById('s-r').textContent = ((s.frames - stats.f) / dt).toFixed(1);
+  }
+  stats.f = s.frames; stats.t = Date.now();
+}
+stats.t = Date.now();
+
+function age(a, now) { return Math.max(0, (now - new Date(a.last_seen).getTime()) / 1000); }
+
+function table(list, now) {
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  empty.style.display = list.length ? 'none' : '';
+
+  const val = (a) => sortKey === 'age' ? age(a, now) : a[sortKey];
+  const sorted = [...list].sort((x, y) => {
+    const a = val(x), b = val(y);
+    // Aircraft missing the sort field sink to the bottom either way.
+    if (a == null || a === '') return 1;
+    if (b == null || b === '') return -1;
+    return (a > b ? 1 : a < b ? -1 : 0) * sortDir;
+  });
+
+  rows.replaceChildren(...sorted.map(a => {
+    const tr = document.createElement('tr');
+    if (a.hex === selected) tr.className = 'sel';
+    if (!a.has_position) tr.classList.add('nopos');
+    const flag = flagged.get(a.hex);
+    if (flag) {
+      tr.classList.add('flag');
+      if (flag.urgent) tr.classList.add('urgent');
+      tr.title = flag.rules.join(' · ');
+    }
+    const vr = a.vertical_rate || 0;
+    const arrow = vr > 100 ? '<span class="up">▲</span>' : vr < -100 ? '<span class="down">▼</span>' : '';
+    tr.innerHTML = `
+      <td class="call">${a.callsign || ''}</td>
+      <td class="hex">${a.hex}</td>
+      <td>${a.has_altitude ? a.altitude.toLocaleString() : '—'} ${arrow}</td>
+      <td>${a.speed ? Math.round(a.speed) : '—'}</td>
+      <td>${a.has_track ? Math.round(a.track) + '°' : '—'}</td>
+      <td>${a.distance_nm ? a.distance_nm.toFixed(0) : '—'}</td>
+      <td>${a.messages}</td>
+      <td>${age(a, now).toFixed(0)}s</td>`;
+    tr.onclick = () => select(a.hex, false);
+    return tr;
+  }));
+}
+
+function select(hex, fromMap) {
+  selected = selected === hex ? null : hex;
+  const s = state.get(selected);
+  if (s && !fromMap) { autoFit = false; map.panTo(s.marker.getLatLng()); }
+  document.querySelectorAll('#rows tr').forEach(tr => {
+    tr.classList.toggle('sel', tr.children[1].textContent === selected);
+  });
+}
+
+document.querySelectorAll('th[data-k]').forEach(th => {
+  th.onclick = () => {
+    const k = th.dataset.k;
+    sortDir = (k === sortKey) ? -sortDir : 1;
+    sortKey = k;
+    document.querySelectorAll('th[data-k]').forEach(o => o.removeAttribute('data-dir'));
+    th.dataset.dir = sortDir > 0 ? '▲' : '▼';
+  };
+});
+
+async function poll() {
+  try {
+    const r = await fetch('/api/aircraft');
+    if (!r.ok) throw new Error(r.status);
+    render(await r.json());
+    document.getElementById('stale').textContent = '';
+  } catch (e) {
+    document.getElementById('stale').textContent = 'receiver offline';
+  }
+}
+poll();
+setInterval(poll, 1000);
+
+// --- the receiver's own position -------------------------------------
+// Setting this enables single-frame position fixes and gives every
+// contact a range, so it is worth getting right. The browser knows
+// where it is; the assumption is that the browser is at the antenna,
+// which is true when the receiver is the machine you are sitting at
+// and false when you have opened the page from the sofa of another
+// house — hence a button rather than doing it on load.
+const posText = document.getElementById('pos-text');
+const posNote = document.getElementById('pos-note');
+const locate = document.getElementById('locate');
+
+function note(text, kind) {
+  posNote.textContent = text || '';
+  posNote.className = kind || '';
+}
+
+function showPosition(p) {
+  posText.textContent = p.set
+    ? `Antenna ${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}`
+    : 'Antenna position not set — no range, and positions need a frame pair';
+  locate.hidden = !p.settable;
+}
+
+fetch('/api/position').then(r => r.json()).then(showPosition)
+  .catch(() => { posText.textContent = ''; });
+
+// One page serves both receivers, so it names itself from whichever is
+// running rather than claiming to be the 1090 MHz one.
+fetch('/api/info').then(r => r.json()).then(info => {
+  if (!info.name) return;
+  document.title = `${info.name} Receiver`;
+  document.querySelector('h1').textContent = `${info.name} Receiver`;
+  const band = document.getElementById('band');
+  if (band && info.band) band.textContent = info.band;
+}).catch(() => {});
+
+// Ground stations, which only a UAT receiver hears. They are fixed
+// transmitters, so they are drawn once and left alone.
+const groundSeen = new Map();
+async function pollGround() {
+  let data;
+  try {
+    const r = await fetch('/api/ground');
+    if (!r.ok) return;            // not a receiver that has any
+    data = await r.json();
+  } catch (e) { return; }
+
+  const el = document.getElementById('ground');
+  const n = data.stations.length;
+  el.textContent = n ? `Ground ${n}` : '';
+  for (const st of data.stations) {
+    if (!st.has_position || groundSeen.has(st.site)) continue;
+    groundSeen.set(st.site, L.marker([st.lat, st.lon], {
+      interactive: false,
+      icon: L.divIcon({ className: '', iconSize: [0, 0],
+        html: `<div class="gs" title="ground station ${st.site}">◉ GS${st.site}</div>` }),
+    }).addTo(map));
+  }
+}
+pollGround();
+setInterval(pollGround, 10000);
+
+locate.onclick = () => {
+  if (!navigator.geolocation) {
+    // Browsers only offer a location to a secure page: https, or
+    // localhost. Opening this over the LAN by IP is neither.
+    note('this browser will not share a location with a page served over plain http — open it on localhost', 'bad');
+    return;
+  }
+  locate.disabled = true;
+  const was = locate.textContent;
+  locate.textContent = 'Locating…';
+  note('');
+
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude, longitude, accuracy } = pos.coords;
+    try {
+      const r = await fetch('/api/position', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: latitude, lon: longitude, accuracy_m: accuracy }),
+      });
+      const text = await r.text();
+      if (!r.ok) { note(text.trim(), 'bad'); return; }
+      const p = JSON.parse(text);
+      showPosition(p);
+      note(p.warning || `set from this browser ±${fmtAccuracy(accuracy)}` +
+           (p.saved ? ', saved' : ''), p.warning ? 'warn' : 'ok');
+    } catch (e) {
+      note('could not reach the receiver: ' + e, 'bad');
+    } finally {
+      locate.disabled = false; locate.textContent = was;
+    }
+  }, err => {
+    locate.disabled = false; locate.textContent = was;
+    note({
+      1: 'permission refused — the browser will not share a location',
+      2: 'the browser could not work out where it is',
+      3: 'the browser took too long to work out where it is',
+    }[err.code] || err.message, 'bad');
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+};
+
+function fmtAccuracy(m) {
+  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+}
+
+// --- remembered settings ---------------------------------------------
+// Browser storage is per-viewer and can be unavailable outright — a
+// private window, or a browser set to refuse it — so every access is
+// guarded and the page works the same when it returns nothing.
+function remember(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch (e) { /* not available */ }
+}
+function recall(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+// --- alerts ---------------------------------------------------------
+// The receiver decides what is worth an alert; this only shows them.
+// flagged maps an aircraft to the rules it has matched, which is what
+// colours its row and rings it on the map.
+const flagged = new Map();
+let alertsSeen = null;        // timestamp of the newest alert already shown
+let cleared = null;           // alerts before this are hidden
+const sound = document.getElementById('sound');
+const notify = document.getElementById('notify');
+
+// A pulsing circle under a flagged aircraft. Attached to the marker's
+// own pane so it moves with it, and removed as soon as the aircraft
+// stops matching anything.
+function ring(s, hex, ll) {
+  const want = flagged.has(hex);
+  if (want && !s.ring) {
+    s.ring = L.circleMarker(ll, {
+      radius: 14, color: flagged.get(hex).urgent ? '#f85149' : '#d29922',
+      weight: 2, fill: false, className: 'ring', interactive: false,
+    }).addTo(map);
+  } else if (want) {
+    s.ring.setLatLng(ll);
+  } else if (s.ring) {
+    map.removeLayer(s.ring); s.ring = null;
+  }
+}
+
+// beep is a short two-tone chirp, synthesised rather than fetched so
+// the page still makes a noise with no network.
+let audio = null;
+function beep(urgent) {
+  if (sound.getAttribute('aria-pressed') !== 'true') return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const at = audio.currentTime;
+    for (let i = 0; i < (urgent ? 3 : 1); i++) {
+      const osc = audio.createOscillator(), gain = audio.createGain();
+      osc.frequency.value = urgent ? 880 : 660;
+      gain.gain.setValueAtTime(.0001, at + i * .18);
+      gain.gain.exponentialRampToValueAtTime(.22, at + i * .18 + .01);
+      gain.gain.exponentialRampToValueAtTime(.0001, at + i * .18 + .14);
+      osc.connect(gain); gain.connect(audio.destination);
+      osc.start(at + i * .18); osc.stop(at + i * .18 + .15);
+    }
+  } catch (e) { /* no audio device, or the tab has never been clicked */ }
+}
+
+function desktop(a) {
+  if (notify.getAttribute('aria-pressed') !== 'true') return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  new Notification(a.rule, { body: alertText(a), tag: a.hex + a.rule });
+}
+
+// Both buttons are off until asked for — a page that makes a noise or
+// raises a notification without being asked is a page people close —
+// but once asked for, the answer sticks across reloads. A receiver gets
+// restarted and its page reopened often enough that having to turn the
+// alert noise back on every time would mean missing the alert it was
+// turned on for.
+sound.onclick = () => {
+  const on = sound.getAttribute('aria-pressed') !== 'true';
+  sound.setAttribute('aria-pressed', on);
+  remember('alertSound', on);
+  if (on) beep(false);   // also unlocks audio, which needs a click
+};
+notify.onclick = async () => {
+  if (!('Notification' in window)) return;
+  const on = notify.getAttribute('aria-pressed') !== 'true';
+  if (on && Notification.permission !== 'granted') {
+    if (await Notification.requestPermission() !== 'granted') return;
+  }
+  notify.setAttribute('aria-pressed', on);
+  remember('alertNotify', on);
+};
+
+// Restore both, with one caveat each. Audio cannot start until the page
+// has been interacted with, so a restored Sound setting is armed and
+// unlocks itself on the first click or key anywhere on the page.
+// Notify is only restored while permission still stands: showing it lit
+// when the browser has since revoked it would be a lie.
+if (recall('alertSound') === 'true') {
+  sound.setAttribute('aria-pressed', 'true');
+  const unlock = () => {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+    } catch (e) { /* no audio device */ }
+    removeEventListener('pointerdown', unlock);
+    removeEventListener('keydown', unlock);
+  };
+  addEventListener('pointerdown', unlock);
+  addEventListener('keydown', unlock);
+}
+if (recall('alertNotify') === 'true' && 'Notification' in window &&
+    Notification.permission === 'granted') {
+  notify.setAttribute('aria-pressed', 'true');
+}
+document.getElementById('aclear').onclick = () => {
+  cleared = new Date().toISOString();
+  document.getElementById('alist').replaceChildren();
+  document.getElementById('a-n').textContent = '0';
+};
+
+function alertText(a) {
+  const bits = [];
+  if (a.squawk) bits.push('squawk ' + a.squawk);
+  if (a.emergency) bits.push(a.emergency);
+  if (a.altitude) bits.push(a.altitude.toLocaleString() + ' ft');
+  if (a.distance_nm) bits.push(a.distance_nm.toFixed(0) + ' NM');
+  return bits.join(' · ') || (a.note || '');
+}
+
+function showAlerts(list) {
+  const panel = document.getElementById('alerts');
+  const ul = document.getElementById('alist');
+  const shown = list.filter(a => !cleared || a.at > cleared);
+  panel.hidden = shown.length === 0;
+  document.getElementById('a-n').textContent = shown.length;
+
+  ul.replaceChildren(...shown.slice(0, 60).map(a => {
+    const li = document.createElement('li');
+    if (a.urgent) li.classList.add('urgent');
+    const t = new Date(a.at);
+    li.innerHTML = `<span class="t">${t.toTimeString().slice(0, 8)}</span>
+      <span class="r">${a.rule}</span>
+      <span class="w">${a.callsign || a.hex}</span>
+      <span class="d">${alertText(a)}</span>`;
+    li.title = a.note || '';
+    li.onclick = () => { const s = state.get(a.hex); if (s) { autoFit = false; map.panTo(s.marker.getLatLng()); } select(a.hex, false); };
+    return li;
+  }));
+}
+
+async function pollAlerts() {
+  let data;
+  try {
+    data = await (await fetch('/api/alerts')).json();
+  } catch (e) { return; }
+  if (!data.watching) return;
+
+  // Rebuild the flag table from the alerts still in the list, so a
+  // highlight disappears with the aircraft rather than sticking.
+  flagged.clear();
+  for (const a of data.alerts) {
+    const f = flagged.get(a.hex) || { rules: [], urgent: false };
+    if (!f.rules.includes(a.rule)) f.rules.push(a.rule);
+    f.urgent = f.urgent || a.urgent;
+    flagged.set(a.hex, f);
+  }
+  showAlerts(data.alerts);
+
+  // Announce only what has arrived since the last poll, and only once.
+  const fresh = data.alerts.filter(a => (!alertsSeen || a.at > alertsSeen) && (!cleared || a.at > cleared));
+  if (alertsSeen !== null && fresh.length) {
+    beep(fresh.some(a => a.urgent));
+    fresh.slice(0, 3).forEach(desktop);
+  }
+  if (data.alerts.length) alertsSeen = data.alerts[0].at;
+  else if (alertsSeen === null) alertsSeen = '';
+}
+pollAlerts();
+setInterval(pollAlerts, 2000);
+</script>
+</body>
+</html>

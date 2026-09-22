@@ -1,0 +1,56 @@
+# Cut a release from a tag:
+#
+#     git tag -a v0.1.0 -m "..." && git push origin v0.1.0
+#
+# Each platform gets one self-contained binary. There is nothing to
+# unpack: the receivers, their pages, the offline basemap and Leaflet are
+# all compiled in.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # A release that does not pass its own tests is not worth cutting.
+      - name: Test
+        run: go test ./...
+
+      - name: Build every platform
+        run: |
+          mkdir -p dist
+          version="${GITHUB_REF_NAME}"
+          ldflags="-s -w -X github.com/thatSFguy/swDefinedRadio/internal/cli.Version=${version}"
+          for target in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            out="dist/sdr-${version}-${os}-${arch}"
+            # Not "[ ... ] && out=...": these steps run under bash -e, so
+            # the test failing for every non-Windows target would end the
+            # step with it.
+            if [ "$os" = windows ]; then
+              out="${out}.exe"
+            fi
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/sdr
+            echo "  built $out"
+          done
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file .github/release-notes.md
