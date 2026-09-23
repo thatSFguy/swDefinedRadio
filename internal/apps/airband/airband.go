@@ -197,8 +197,15 @@ type State struct {
 	Name     string    `json:"name,omitempty"`
 	Scanning bool      `json:"scanning"`
 	Busy     bool      `json:"busy"`
-	Level    float64   `json:"level"`
-	Squelch  float64   `json:"squelch"`
+	Level   float64 `json:"level"`
+	Squelch float64 `json:"squelch"` // the one in force, whichever it is
+
+	// OnChannel says the frequency is one of the saved channels, and
+	// Override is that channel's own squelch, zero where it has none.
+	// Together they say what the squelch control is about to change:
+	// this channel, or the receiver.
+	OnChannel bool    `json:"on_channel"`
+	Override  float64 `json:"override"`
 	Channels   []Channel `json:"channels"`
 	Candidates []Channel `json:"candidates"`
 	Sweeping   bool           `json:"sweeping"`
@@ -216,7 +223,7 @@ func (a *App) State() State {
 	heard := make([]Heard, 0, len(a.heard))
 	heard = append(heard, a.heard...)
 	slices.Reverse(heard)
-	return State{
+	st := State{
 		Freq: a.freq, Name: a.nameOfLocked(a.freq),
 		Scanning: a.scanning, Busy: a.busy,
 		Level: a.am.Level(), Squelch: a.am.Squelch,
@@ -227,9 +234,16 @@ func (a *App) State() State {
 		Sweeping:   a.sweeping,
 		Survey:     a.surveyProgressLocked(),
 		Heard:    heard,
-		OnAir:    a.src != nil,
-		Rate:     demod.AudioRate,
+		OnAir: a.src != nil,
+		Rate:  demod.AudioRate,
 	}
+	for _, c := range a.channels {
+		if c.Hz == a.freq {
+			st.OnChannel, st.Override = true, c.Squelch
+			break
+		}
+	}
+	return st
 }
 
 func (a *App) nameOfLocked(hz uint32) string {

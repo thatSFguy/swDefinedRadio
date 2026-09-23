@@ -118,9 +118,10 @@
     <button id="scan">Scan</button>
   </div>
   <div class="row">
-    <span class="sq">squelch</span>
+    <span class="sq" id="sqwhat">squelch</span>
     <input type="range" id="squelch" min="0" max="0.15" step="0.002">
     <span class="sq" id="sqv">0.000</span>
+    <button id="sqauto" hidden title="forget this channel's own squelch and use the receiver's">Auto</button>
   </div>
   <audio id="audio" hidden></audio>
 </div>
@@ -201,8 +202,22 @@ $('scan').onclick = async () => {
 };
 
 $('squelch').oninput = () => { $('sqv').textContent = (+$('squelch').value).toFixed(3); };
+
+// Adjusting the squelch while listening to a channel is about that
+// channel: the noise floor differs across this band by a factor of two,
+// so a setting made while sitting on one frequency is rarely the right
+// one for all of them. Off a saved channel there is nothing to attach it
+// to, so it changes the receiver's own.
 $('squelch').onchange = async () => {
-  const d = await post('/api/squelch', { squelch: +$('squelch').value });
+  const v = +$('squelch').value;
+  const d = state && state.on_channel
+    ? await post('/api/channel/squelch', { freq_hz: state.freq_hz, squelch: v })
+    : await post('/api/squelch', { squelch: v });
+  if (d) { state = d; draw(); }
+};
+
+$('sqauto').onclick = async () => {
+  const d = await post('/api/channel/squelch', { freq_hz: state.freq_hz, squelch: 0 });
   if (d) { state = d; draw(); }
 };
 
@@ -363,6 +378,10 @@ function draw() {
     $('squelch').value = state.squelch;
     $('sqv').textContent = state.squelch.toFixed(3);
   }
+  // Say which squelch is being adjusted, so a setting made here is not a
+  // surprise on the next channel.
+  $('sqwhat').textContent = state.on_channel ? 'squelch · this channel' : 'squelch · all';
+  $('sqauto').hidden = !state.override;
 
   if (!editing) {
     $('channels').replaceChildren(...state.channels.map(c => {

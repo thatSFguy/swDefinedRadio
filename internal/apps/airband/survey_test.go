@@ -422,3 +422,65 @@ func TestASingleHitIsNotAChannel(t *testing.T) {
 		t.Error("a single stray sample would offer a channel")
 	}
 }
+
+// The state has to say which squelch the control is about to change, or
+// a setting made while listening to one channel silently becomes the
+// setting for all of them.
+func TestStateSaysWhoseSquelchItIs(t *testing.T) {
+	a := testApp(t, Channel{Name: "Chicago Center", Hz: 133_200_000})
+	a.SetSquelch(0.03)
+
+	// On a saved channel with no setting of its own.
+	_ = a.Tune(133_200_000)
+	st := a.State()
+	if !st.OnChannel {
+		t.Error("on a saved channel, but the state does not say so")
+	}
+	if st.Override != 0 {
+		t.Errorf("override = %v, want none yet", st.Override)
+	}
+	if st.Squelch != 0.03 {
+		t.Errorf("squelch in force = %v, want the receiver's", st.Squelch)
+	}
+
+	// Give the channel one of its own.
+	if err := a.SetChannelSquelch(133_200_000, 0.026); err != nil {
+		t.Fatalf("SetChannelSquelch: %v", err)
+	}
+	st = a.State()
+	if st.Override != 0.026 || st.Squelch != 0.026 {
+		t.Errorf("override %v, in force %v, want 0.026 for both", st.Override, st.Squelch)
+	}
+
+	// Somewhere that is not a channel at all.
+	_ = a.Tune(119_375_000)
+	if st = a.State(); st.OnChannel || st.Override != 0 {
+		t.Errorf("off a channel: on_channel=%v override=%v", st.OnChannel, st.Override)
+	}
+	if st.Squelch != 0.03 {
+		t.Errorf("off a channel the receiver's %v should be in force, got %v", 0.03, st.Squelch)
+	}
+}
+
+// Auto means the channel goes back to the receiver's setting, and the
+// receiver's own is left alone.
+func TestAutoReturnsAChannelToTheReceiverSetting(t *testing.T) {
+	a := testApp(t, Channel{Name: "Chicago Center", Hz: 133_200_000})
+	a.SetSquelch(0.03)
+	_ = a.Tune(133_200_000)
+
+	if err := a.SetChannelSquelch(133_200_000, 0.08); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := a.SetChannelSquelch(133_200_000, 0); err != nil {
+		t.Fatalf("auto: %v", err)
+	}
+
+	st := a.State()
+	if st.Override != 0 {
+		t.Errorf("override = %v after Auto", st.Override)
+	}
+	if st.Squelch != 0.03 {
+		t.Errorf("squelch in force = %v, want the receiver's 0.03 back", st.Squelch)
+	}
+}

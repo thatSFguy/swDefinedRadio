@@ -871,9 +871,24 @@ if there is speech, **Keep** it under a name; if there is hiss,
 ### Squelch per channel
 
 A tower two miles away and an approach frequency fifty miles off cannot
-share a threshold: one setting either misses the far one or opens
-constantly on the near one. Each channel can carry its own, in the box
-beside it in the list; leave it blank to use the receiver's.
+share a threshold, and neither can two channels whose noise floors differ
+— across this band the floor runs from about 0.014 to 0.13, so one
+setting is either deaf where it is quiet or permanently open where it is
+not.
+
+So the squelch control follows what you are listening to. On a saved
+channel it sets that channel's own, and says so; anywhere else it sets
+the receiver's. **Auto** appears when a channel has one of its own and
+returns it to the receiver's setting. There is also a box beside each
+channel in the list, which does the same thing without tuning there.
+
+Channels the survey offers arrive with the threshold their own measured
+noise implies, so they are usually right without being touched.
+
+A note if you change antennas: every floor here was measured against the
+one that was connected, and thresholds derived from them will be wrong
+afterwards. Press **Start over** on the survey rather than trusting the
+old numbers.
 
 ### Scanning
 
