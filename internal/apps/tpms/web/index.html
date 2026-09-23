@@ -65,6 +65,17 @@
   .asg:hover { border-color:var(--line); }
   .asg:focus { border-color:var(--accent); outline:none; }
   .asg.none { color:var(--dim); font-style:italic; }
+  .band { display:flex; align-items:center; gap:6px; margin:10px 0 0; flex-wrap:wrap; }
+  .band .cap { color:var(--dim); font-size:11px; text-transform:uppercase;
+               letter-spacing:.5px; margin-right:2px; }
+  .band button {
+    background:#21262d; color:var(--dim); border:1px solid var(--line);
+    border-radius:6px; font:inherit; font-size:11px; padding:4px 11px; cursor:pointer;
+  }
+  .band button:hover:not(:disabled) { color:var(--fg); border-color:var(--dim); }
+  .band button.on { color:var(--accent); border-color:var(--accent); background:#161b22; }
+  .band button:disabled { opacity:.5; cursor:default; }
+  .band .why { color:var(--dim); font-size:11px; font-style:italic; }
   #feed div { padding:2px 0; border-bottom:1px solid #21262d; color:var(--dim); font-size:12px;
               font-family:ui-monospace,SFMono-Regular,monospace; }
   #feed b { color:var(--fg); font-weight:500; }
@@ -77,6 +88,9 @@
   <b id="s-s">0</b> sensors ·
   <b id="s-v">0</b> vehicles
   <span id="stale"></span>
+</div>
+<div class="band" id="band">
+  <span class="cap">Listening</span>
 </div>
 
 <h2>Vehicles</h2>
@@ -331,6 +345,67 @@ async function poll() {
   }
 }
 poll();
+// One dongle has 2.4 MHz of bandwidth and the two TPMS bands are 119 MHz
+// apart, so it cannot cover both at once. Hopping hears each of them
+// about half the time; parking on one doubles the chance of catching
+// what transmits there, which is worth doing when you know what you are
+// waiting for.
+let bands = [], band = 'hop', bandBusy = false;
+
+async function setBand(b) {
+  if (bandBusy) return;
+  bandBusy = true;
+  renderBand();
+  try {
+    const r = await fetch('/api/band', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ band: b }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      band = d.band; bands = d.bands || bands;
+    }
+  } catch (e) { /* the next poll will show where it ended up */ }
+  bandBusy = false;
+  renderBand();
+}
+
+function renderBand() {
+  const box = $('band');
+  const mk = (value, text, title) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.title = title;
+    b.className = band === value ? 'on' : '';
+    b.disabled = bandBusy;
+    b.onclick = () => setBand(value);
+    return b;
+  };
+
+  const kids = [box.firstElementChild];
+  kids.push(mk('hop', 'Hop', 'visit each band in turn, hearing each about half the time'));
+  for (const f of bands) {
+    kids.push(mk(f, f, 'stay on ' + f + ', hearing everything that transmits there'));
+  }
+  if (band !== 'hop') {
+    const why = document.createElement('span');
+    why.className = 'why';
+    why.textContent = 'parked — anything on the other band is being missed';
+    kids.push(why);
+  }
+  box.replaceChildren(...kids.filter(Boolean));
+}
+
+async function loadBand() {
+  try {
+    const d = await (await fetch('/api/band')).json();
+    band = d.band; bands = d.bands || [];
+  } catch (e) { /* leave the row empty rather than guessing */ }
+  renderBand();
+}
+loadBand();
+
 document.querySelectorAll('th[data-k]').forEach(th => {
   th.onclick = () => {
     const k = th.dataset.k;

@@ -580,6 +580,30 @@ overlap never merges two cars. Two vehicles that genuinely always travel
 together are the one case clustering cannot separate — split them by
 hand if it happens.
 
+### Hopping, or staying put
+
+One dongle has 2.4 MHz of bandwidth and the two TPMS bands are 119 MHz
+apart, so it cannot cover both at once. The default is to hop, dwelling
+`-hop` seconds on each, which hears roughly half of what transmits on
+either.
+
+The buttons at the top of the page park it on one band instead:
+
+* **Hop** — both in turn, the default, and the right answer when you do
+  not know what you are waiting for.
+* **315M** — North American sensors, which is most Toyota, Ford and GM.
+* **433.92M** — European sensors, and Hyundai/Kia.
+
+Parking doubles the chance of catching what transmits on that band, at
+the cost of hearing nothing from the other. It restarts rtl_433, because
+the frequencies are command line arguments, so there is a second or two
+of deafness on either side of the change.
+
+Worth knowing if a make is not turning up: sensors transmit while the
+wheels are turning, and only rarely when parked. A vehicle has to
+actually drive past during a listening window, so hearing nothing from a
+make says more about what has gone by than about what is supported.
+
 ### When the guess is wrong
 
 Co-occurrence is a guess, and it fails in both directions. Two vehicles

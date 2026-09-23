@@ -22,7 +22,9 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	lib "github.com/thatSFguy/swDefinedRadio/internal/tpms"
@@ -52,11 +54,23 @@ type Config struct {
 	Quiet bool
 }
 
+// Hop is the band setting that visits every configured frequency in
+// turn, rather than staying on one.
+const Hop = "hop"
+
 // App is a configured TPMS logger.
 type App struct {
 	cfg   Config
 	src   lib.SourceConfig
 	store *lib.Store
+
+	// band is which frequency to stay on, or Hop for all of them.
+	// Changing it restarts rtl_433, because the frequencies are command
+	// line arguments and it has no way to be told otherwise.
+	mu      sync.Mutex
+	band    string
+	version int
+	cancel  context.CancelFunc
 }
 
 // New opens the store, which carries whatever previous runs heard.
@@ -70,6 +84,7 @@ func New(cfg Config) (*App, error) {
 	}
 	return &App{
 		cfg:   cfg,
+		band:  Hop,
 		store: store,
 		src: lib.SourceConfig{
 			Freqs:      cfg.Freqs,
@@ -79,6 +94,66 @@ func New(cfg Config) (*App, error) {
 			Device:     strconv.Itoa(cfg.Device),
 		},
 	}, nil
+}
+
+// Bands are the frequencies this receiver can be parked on.
+func (a *App) Bands() []string { return a.cfg.Freqs }
+
+// Band is the frequency it is on, or Hop.
+func (a *App) Band() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.band
+}
+
+// SetBand parks the receiver on one frequency, or sets it hopping.
+//
+// One dongle cannot cover 315 and 433.92 MHz at once — they are 119 MHz
+// apart and it has 2.4 MHz of bandwidth — so hopping means hearing each
+// of them half the time. Staying on one doubles the chance of catching
+// what transmits there, which is worth doing when you know what you are
+// waiting for.
+func (a *App) SetBand(band string) error {
+	if band == "" {
+		band = Hop
+	}
+	if band != Hop && !slices.Contains(a.cfg.Freqs, band) {
+		return fmt.Errorf("%q is not one of the frequencies this receiver was given (%s)",
+			band, strings.Join(a.cfg.Freqs, ", "))
+	}
+
+	a.mu.Lock()
+	if a.band == band {
+		a.mu.Unlock()
+		return nil
+	}
+	a.band = band
+	a.version++
+	cancel := a.cancel
+	a.mu.Unlock()
+
+	// Stop the child so the loop starts a new one on the new frequency.
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+// sourceFor is the rtl_433 configuration for the current band.
+func (a *App) sourceFor() (lib.SourceConfig, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg := a.src
+	if a.band != Hop {
+		cfg.Freqs = []string{a.band}
+	}
+	return cfg, a.version
+}
+
+func (a *App) setCancel(f context.CancelFunc) {
+	a.mu.Lock()
+	a.cancel = f
+	a.mu.Unlock()
 }
 
 // Store is the sensor table.
@@ -91,6 +166,7 @@ func (a *App) Close() error { return a.store.Close() }
 func (a *App) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	Routes(mux, a.store)
+	a.bandRoutes(mux)
 
 	sub, err := fsSub()
 	if err != nil {
@@ -115,11 +191,38 @@ func (a *App) RunAt(ctx context.Context, addr string) error {
 }
 
 // Run starts rtl_433 and records what it decodes, until ctx is cancelled.
+//
+// It restarts the child whenever the band changes, since the frequencies
+// are command line arguments; a change cancels the run in progress rather
+// than waiting for it to end on its own.
 func (a *App) Run(ctx context.Context) error {
-	log.Printf("listening on %s%s", strings.Join(a.src.Freqs, ", "), hopNote(a.src))
 	log.Printf("logging to %s", filepath.Join(a.cfg.Dir, "readings.jsonl"))
 
-	src, err := lib.Start(ctx, a.src)
+	for ctx.Err() == nil {
+		cfg, version := a.sourceFor()
+		log.Printf("listening on %s%s", strings.Join(cfg.Freqs, ", "), hopNote(cfg))
+
+		runCtx, cancel := context.WithCancel(ctx)
+		a.setCancel(cancel)
+		err := a.listen(runCtx, cfg)
+		cancel()
+		a.setCancel(nil)
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// A run that ended because the band changed is not a failure;
+		// go round and start on the new one.
+		if _, now := a.sourceFor(); now != version {
+			continue
+		}
+		return err
+	}
+	return ctx.Err()
+}
+
+func (a *App) listen(ctx context.Context, cfg lib.SourceConfig) error {
+	src, err := lib.Start(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("radio: %w", err)
 	}
@@ -186,6 +289,31 @@ func describe(r lib.Reading) string {
 		b.WriteString("  BATTERY LOW")
 	}
 	return b.String()
+}
+
+// bandRoutes report and change which frequency the receiver is on.
+func (a *App) bandRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/band", func(w http.ResponseWriter, r *http.Request) {
+		web.WriteJSON(w, map[string]any{
+			"band":  a.Band(),
+			"bands": a.Bands(),
+		})
+	})
+
+	mux.HandleFunc("POST /api/band", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Band string `json:"band"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := a.SetBand(req.Band); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		web.WriteJSON(w, map[string]any{"band": a.Band(), "bands": a.Bands()})
+	})
 }
 
 // Split turns the comma-separated -freq flag into the list rtl_433 wants.
