@@ -102,9 +102,12 @@ func DecodeADSB(p []byte) (Message, bool) {
 		}
 	}
 
-	// The mode status element, bytes 18 onward, carries the call sign.
-	// Only a long message has it.
-	if len(p) >= 34 {
+	// The mode status element, bytes 18 onward, carries the call sign —
+	// but only in message types 1 and 3. Types 2, 5 and 6 are just as long
+	// and put the auxiliary state vector in the same bytes; read as a call
+	// sign, its small numbers come out as "0000000", and the aircraft's
+	// name flickered between that and its real one.
+	if len(p) >= 34 && (m.Type == 1 || m.Type == 3) {
 		m.Emitter, m.Callsign = modeStatus(p)
 	}
 	return m, true

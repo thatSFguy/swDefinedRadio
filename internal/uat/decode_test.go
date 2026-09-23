@@ -218,3 +218,31 @@ func TestDecodeUplinkHeader(t *testing.T) {
 		t.Errorf("header = %+v", u)
 	}
 }
+
+// Only message types 1 and 3 carry the mode status element. The other
+// long types put the auxiliary state vector where the call sign would
+// be, and reading it as one named every aircraft "0000000" whenever one
+// arrived.
+func TestCallsignOnlyFromModeStatusTypes(t *testing.T) {
+	for typ, want := range map[byte]string{1: "N123AB", 2: "", 3: "N123AB", 5: "", 6: ""} {
+		p := encodeSV(40.6892, -74.0445, 4500, false, 120, 90, 0)
+		p[0] = typ << 3
+		putCallsign(p, 1, "N123AB")
+		m, ok := DecodeADSB(p)
+		if !ok {
+			t.Fatalf("type %d was rejected", typ)
+		}
+		if m.Callsign != want {
+			t.Errorf("type %d: callsign = %q, want %q", typ, m.Callsign, want)
+		}
+	}
+
+	// What a type 2 message actually carries there: a secondary altitude
+	// and little else, all small numbers.
+	p := encodeSV(40.6892, -74.0445, 4500, false, 120, 90, 0)
+	p[0] = 2 << 3
+	p[17], p[18] = 0x01, 0x2c
+	if m, _ := DecodeADSB(p); m.Callsign != "" {
+		t.Errorf("an auxiliary state vector was read as call sign %q", m.Callsign)
+	}
+}
