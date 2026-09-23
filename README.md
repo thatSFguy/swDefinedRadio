@@ -114,6 +114,26 @@ GitHub only, redirects included. `sdr install -latest` takes whatever
 upstream published most recently instead, which cannot be checked against
 a known hash; it says so when you use it.
 
+**These binaries are not code-signed.** Neither project ships an
+Authenticode signature, so Windows cannot tell you who built them and
+SmartScreen may warn. That is normal for both projects and is the reason
+the hashes above are pinned: they are the only thing tying what you run
+to what was reviewed.
+
+What they ask of Windows, read from their import tables:
+
+| | Network | Registry | Notable |
+|---|---|---|---|
+| `rtl_sdr`, `rtl_test`, `rtlsdr.dll` | none | none | — |
+| `rtl_tcp` | sockets | none | its whole job is a TCP server on `127.0.0.1:1234` |
+| `rtl_433` | sockets | read-only | static MinGW build; has MQTT/syslog output plugins, unused here |
+
+None import the registry-write, service, process-injection or
+HTTP-download APIs. `rtl_433` is run as `-F json` with output on stdout,
+so none of its network plugins are reached. Import tables cannot prove
+what a program does not do — a program can resolve APIs at runtime — but
+nothing here looks like anything other than what it claims to be.
+
 On Linux and macOS these come from the package manager instead
 (`apt install rtl-sdr rtl-433`), and nothing is downloaded.
 
