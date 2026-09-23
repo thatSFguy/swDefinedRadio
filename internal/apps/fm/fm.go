@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,9 @@ type Config struct {
 	Volume  float64 // output gain multiplier
 	Deemph  string  // "us" (75us) or "eu" (50us)
 	Speaker bool    // also play through this machine's audio device
+
+	// Dir is where recordings are kept, under recordings/.
+	Dir string
 }
 
 // App is a configured FM receiver.
@@ -51,6 +55,7 @@ type App struct {
 	tau   float64
 	st    *station
 	audio *audio.Broadcaster
+	rec   *audio.Store
 }
 
 // New builds the receiver, refusing a frequency outside the band before
@@ -68,6 +73,7 @@ func New(cfg Config) (*App, error) {
 		tau:   tau,
 		st:    &station{freq: cfg.Freq},
 		audio: audio.NewBroadcaster(),
+		rec:   audio.OpenStore(filepath.Join(dataDir(cfg.Dir), "recordings")),
 	}, nil
 }
 
@@ -92,7 +98,42 @@ func (a *App) Station() (uint32, float64) { return a.st.get() }
 // Handler builds the player and JSON API. ctx bounds the audio stream,
 // which is the one endpoint that does not end on its own.
 func (a *App) Handler(ctx context.Context) (http.Handler, error) {
-	return handler(ctx, a.st, a.audio)
+	return handler(ctx, a.st, a.audio, a.rec, a.Record)
+}
+
+// Record starts or stops recording what is being received. A recording
+// is one long take, named after the station it started on, and it
+// carries on across retuning — the file is whatever came out of the
+// speaker.
+func (a *App) Record(on bool) error {
+	if !on {
+		if name, secs := a.rec.Stop(); name != "" {
+			log.Printf("recorded %s (%.0fs)", name, secs)
+		}
+		return nil
+	}
+	a.st.mu.RLock()
+	freq, onAir := a.st.freq, a.st.src != nil
+	a.st.mu.RUnlock()
+	if !onAir {
+		return ErrNotOnAir
+	}
+	if _, ok := a.rec.Current(); ok {
+		return nil // already recording; starting again would split the take
+	}
+	name, err := a.rec.Start(fmt.Sprintf("%.1fMHz", float64(freq)/1e6))
+	if err != nil {
+		return fmt.Errorf("record: %w", err)
+	}
+	log.Printf("recording to %s", name)
+	return nil
+}
+
+func dataDir(dir string) string {
+	if dir == "" {
+		return "data/fm"
+	}
+	return dir
 }
 
 // Run demodulates until ctx is cancelled.
@@ -110,6 +151,10 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 	// broadcaster itself survives, ready for the next time this receiver
 	// is given the radio.
 	defer a.audio.Drop()
+
+	// A recording ends with the receiver's turn on the radio. Carrying on
+	// would fill the file with nothing until someone noticed.
+	defer a.Record(false)
 
 	if a.cfg.Speaker {
 		if err := audio.Speaker(ctx, a.audio); err != nil {
@@ -216,6 +261,7 @@ func (a *App) receive(ctx context.Context, src sdr.Source) {
 		k := fm.Process(iq[:n], pcm)
 		a.st.setLevel(fm.Level())
 		a.audio.Send(pcm[:k])
+		a.rec.Write(pcm[:k])
 	}
 }
 

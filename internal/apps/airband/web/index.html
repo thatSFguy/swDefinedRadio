@@ -112,6 +112,19 @@
               color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
   .heard .t { color:var(--dim); }
   .heard .w { color:var(--fg); flex:1; }
+  #rec.on { background:var(--bad); border-color:var(--bad); color:#fff; }
+  .heard button {
+    background:none; border:0; color:var(--accent); font:inherit; cursor:pointer;
+    padding:0; text-decoration:none;
+  }
+  .tabs { display:flex; gap:22px; margin:-4px 0 14px; border-bottom:1px solid var(--line); }
+  .tabs button {
+    background:none; border:0; border-bottom:2px solid transparent; border-radius:0;
+    margin-bottom:-1px; padding:4px 0 8px; font-size:13px; font-weight:600; color:var(--dim);
+    text-transform:uppercase; letter-spacing:.8px;
+  }
+  .tabs button:hover:not(:disabled) { color:var(--fg); }
+  .tabs button[aria-selected=true] { color:var(--fg); border-bottom-color:var(--accent); }
   .empty { color:var(--dim); font-size:12px; padding:10px 0; font-style:italic; }
   .err { color:var(--bad); font-size:12px; min-height:18px; }
 </style>
@@ -134,6 +147,7 @@
   <div class="row">
     <button class="go" id="listen" title="turn the audio on or off">Audio on</button>
     <button id="scan">Scan</button>
+    <button id="rec" title="save each transmission as a clip on the server">● Record</button>
     <button id="sqauto" hidden title="forget this channel's own squelch and use the receiver's">Auto squelch</button>
   </div>
   <audio id="audio" hidden></audio>
@@ -167,11 +181,20 @@
 </div>
 
 <div class="card">
-  <h1>Heard</h1>
-  <ul class="heard" id="heard"></ul>
-  <div class="empty" id="hempty">Nothing yet. Channels are quiet until somebody keys up.</div>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-recordings" data-tab="recordings">Recordings</button>
+    <button role="tab" id="tab-heard" data-tab="heard">Heard</button>
+  </div>
+  <div id="pane-recordings" role="tabpanel">
+    <div id="recordings"></div>
+  </div>
+  <div id="pane-heard" role="tabpanel">
+    <ul class="heard" id="heard"></ul>
+    <div class="empty" id="hempty">Nothing yet. Channels are quiet until somebody keys up.</div>
+  </div>
 </div>
 
+<script src="/recordings.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let state = null, playing = false, editing = false;
@@ -488,9 +511,55 @@ function draw() {
     const d = document.createElement('span');
     d.textContent = h.seconds.toFixed(1) + 's';
     li.append(t, w, d);
+    if (h.clip) li.append(playButton(h.clip));
     return li;
   }));
+
+  $('rec').classList.toggle('on', state.recording);
+  $('rec').textContent = state.recording ? '■ Recording' : '● Record';
+  // A new clip is a new transmission; the list is fetched only then,
+  // not on every tick of the poll.
+  const newest = heard.length ? heard[0].clip || '' : '';
+  if (newest !== lastClip) { lastClip = newest; loadRecordings(); }
 }
+
+let lastClip = null;
+
+const recs = Recordings($('recordings'), {
+  empty: 'None yet. Press Record and each transmission is kept as a clip.',
+  onError: msg => { $('cerr').textContent = msg; },
+});
+const loadRecordings = () => recs.load();
+
+// Recordings and the log of what was heard share one card, a tab each.
+// Which one was showing is remembered, since it is usually the same one.
+function showTab(name) {
+  for (const b of document.querySelectorAll('.tabs button')) {
+    const on = b.dataset.tab === name;
+    b.setAttribute('aria-selected', on);
+    $('pane-' + b.dataset.tab).hidden = !on;
+  }
+  try { localStorage.setItem('airband-tab', name); } catch (e) { /* not remembered */ }
+}
+for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => showTab(b.dataset.tab);
+let savedTab = null;
+try { savedTab = localStorage.getItem('airband-tab'); } catch (e) { /* first visit */ }
+showTab(savedTab === 'heard' ? 'heard' : 'recordings');
+
+// Playing from the log goes through the recordings player, so it carries
+// on through the clips after it the same way.
+function playButton(name) {
+  const b = document.createElement('button');
+  b.textContent = '▶';
+  b.title = 'play the recording of this, and the ones after it';
+  b.onclick = () => recs.play(name);
+  return b;
+}
+
+$('rec').onclick = async () => {
+  const d = await post('/api/record', { on: !(state && state.recording) });
+  if (d) { state = d; draw(); }
+};
 
 $('cname').onfocus = $('chz').onfocus = () => { editing = true; };
 $('cname').onblur = $('chz').onblur = () => { editing = false; };

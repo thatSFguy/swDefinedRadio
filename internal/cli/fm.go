@@ -31,6 +31,7 @@ func Fm(args []string) {
 		volume  = fs.Float64("volume", 1.0, "output gain multiplier")
 		region  = fs.String("deemph", "us", "de-emphasis: us (75us) or eu (50us)")
 		speaker = fs.Bool("speaker", false, "also play through this machine's audio device")
+		dir     = fs.String("data", "data/fm", "directory for recordings")
 	)
 	fs.Parse(args)
 
@@ -41,7 +42,7 @@ func Fm(args []string) {
 
 	app, err := fm.New(fm.Config{
 		Freq: freq, Gain: *gain, PPM: *ppm, Device: *device,
-		Volume: *volume, Deemph: *region, Speaker: *speaker,
+		Volume: *volume, Deemph: *region, Speaker: *speaker, Dir: *dir,
 	})
 	if err != nil {
 		log.Fatalf("-freq: %v", err)

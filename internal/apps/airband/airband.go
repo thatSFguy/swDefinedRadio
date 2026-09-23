@@ -85,7 +85,7 @@ type Config struct {
 	Speaker bool
 
 	// Dir is where the channel list is kept, so channels added from the
-	// page outlive a restart.
+	// page outlive a restart, and where recordings go, under recordings/.
 	Dir string
 
 	// Discover sweeps the band on the first run and adds whatever is
@@ -100,6 +100,7 @@ type App struct {
 	cfg   Config
 	am    *demod.AM
 	audio *audio.Broadcaster
+	rec   *audio.Store
 
 	mu       sync.RWMutex
 	channels []Channel
@@ -109,6 +110,11 @@ type App struct {
 	since    time.Time // when the current channel was last busy
 	src      sdr.Source
 	heard    []Heard
+
+	// recording keeps each transmission as a clip of its own. A channel
+	// is silent most of the time, so one long take would be mostly
+	// nothing; a clip per transmission is the part worth keeping.
+	recording bool
 
 	// candidates are what a sweep turned up and nobody has decided about
 	// yet. They are deliberately not channels: a sweep can say something
@@ -139,6 +145,7 @@ type Heard struct {
 	Name    string    `json:"name,omitempty"`
 	Seconds float64   `json:"seconds"`
 	Level   float64   `json:"level"`
+	Clip    string    `json:"clip,omitempty"` // the recording of it, when recording
 }
 
 // New builds the receiver, loading any channels saved from the page.
@@ -150,6 +157,7 @@ func New(cfg Config) (*App, error) {
 		cfg:      cfg,
 		am:       demod.NewAM(),
 		audio:    audio.NewBroadcaster(),
+		rec:      audio.OpenStore(filepath.Join(dataDir(cfg.Dir), "recordings")),
 		channels: slices.Clone(cfg.Channels),
 		scanning: true,
 	}
@@ -212,6 +220,7 @@ type State struct {
 	Sweeping   bool           `json:"sweeping"`
 	Survey     SurveyProgress `json:"survey"`
 	Heard    []Heard   `json:"heard"`
+	Recording bool     `json:"recording"`
 	OnAir    bool      `json:"on_air"`
 	Rate     int       `json:"audio_rate"`
 }
@@ -235,6 +244,7 @@ func (a *App) State() State {
 		Sweeping:   a.sweeping,
 		Survey:     a.surveyProgressLocked(),
 		Heard:    heard,
+		Recording: a.recording,
 		OnAir: a.src != nil,
 		Rate:  demod.AudioRate,
 	}
@@ -318,6 +328,10 @@ func (a *App) tuneLocked(hz uint32) error {
 	// Whichever way this goes, the channel being left takes its history
 	// with it: how recently *it* was busy says nothing about the new one,
 	// and carrying the hold across would make every channel wait.
+	// A transmission interrupted by the move is still one that was heard.
+	if a.busy {
+		a.recordLocked(time.Since(a.since))
+	}
 	a.freq = hz
 	a.since = time.Now()
 	a.tunedAt = a.since
@@ -409,11 +423,27 @@ func (a *App) SetChannels(list []Channel) error {
 }
 
 func (a *App) channelsPath() string {
-	dir := a.cfg.Dir
+	return filepath.Join(dataDir(a.cfg.Dir), "channels.json")
+}
+
+func dataDir(dir string) string {
 	if dir == "" {
-		dir = "data/airband"
+		return "data/airband"
 	}
-	return filepath.Join(dir, "channels.json")
+	return dir
+}
+
+// SetRecording turns keeping a clip of each transmission on or off.
+// Turning it off lets a transmission already being recorded finish, so
+// the clip is not cut off mid-sentence, and ends the session: the next
+// time Record is pressed starts a new one.
+func (a *App) SetRecording(on bool) {
+	a.mu.Lock()
+	a.recording = on
+	a.mu.Unlock()
+	if !on {
+		a.rec.EndSession()
+	}
 }
 
 func (a *App) load() ([]Channel, error) {
@@ -524,9 +554,15 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
+		if a.busy {
+			a.recordLocked(time.Since(a.since))
+		}
 		a.src = nil
 		a.busy = false
 		a.mu.Unlock()
+		// Giving up the radio ends the sitting; clips made after the tab
+		// comes back belong to a new session.
+		a.rec.EndSession()
 		// Let go of anyone listening, or a browser holds a stream that
 		// nothing will write to again.
 		a.audio.Drop()
@@ -572,7 +608,10 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 		}
 		k := a.am.Process(iq[:n], pcm)
 		a.audio.Send(pcm[:k])
+		// After step, so the block that opened the squelch is the first
+		// one in the clip rather than lost while the clip was started.
 		a.step()
+		a.rec.Write(pcm[:k])
 	}
 	return ctx.Err()
 }
@@ -604,6 +643,17 @@ func (a *App) step() {
 	switch {
 	case open && !a.busy:
 		a.since = now // somebody keyed up
+		if a.recording {
+			// The session starts with its first clip, so pressing Record
+			// on a quiet evening leaves no empty session behind.
+			if !a.rec.InSession() {
+				a.rec.BeginSession("airband")
+			}
+			label := fmt.Sprintf("%.3fMHz %s", float64(a.freq)/1e6, a.nameOfLocked(a.freq))
+			if _, err := a.rec.Start(label); err != nil {
+				log.Printf("airband: record: %v", err)
+			}
+		}
 	case !open && a.busy:
 		// Record what was just heard, which is most of the point of
 		// leaving a scanner running while you are not in the room.
@@ -637,12 +687,18 @@ func (a *App) step() {
 
 // recordLocked adds a transmission to the log kept for the page.
 func (a *App) recordLocked(d time.Duration) {
+	clip, _ := a.rec.Stop()
 	if d < 250*time.Millisecond {
-		return // a click of static rather than somebody talking
+		// A click of static rather than somebody talking, and not worth
+		// a file either.
+		if clip != "" {
+			_ = a.rec.Remove(clip)
+		}
+		return
 	}
 	a.heard = append(a.heard, Heard{
 		At: time.Now().Add(-d), Hz: a.freq, Name: a.nameOfLocked(a.freq),
-		Seconds: d.Seconds(), Level: a.am.Level(),
+		Seconds: d.Seconds(), Level: a.am.Level(), Clip: clip,
 	})
 	// Keep the list to something a page can draw.
 	if len(a.heard) > 200 {

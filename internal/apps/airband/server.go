@@ -23,6 +23,7 @@ func fsSub() (fs.FS, error) { return fs.Sub(webFS, "web") }
 // which is the one endpoint that does not end on its own.
 func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 	mux := http.NewServeMux()
+	a.rec.Routes(mux)
 
 	// Live audio as an endless WAV, which any browser will play from an
 	// <audio> element with no client-side decoding.
@@ -95,6 +96,18 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 			return
 		}
 		a.SetScanning(req.Scanning)
+		web.WriteJSON(w, a.State())
+	})
+
+	mux.HandleFunc("POST /api/record", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			On bool `json:"on"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		a.SetRecording(req.On)
 		web.WriteJSON(w, a.State())
 	})
 

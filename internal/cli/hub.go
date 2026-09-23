@@ -63,9 +63,10 @@ func Hub(args []string) {
 		tpmsMode  = fs.String("tpms-mode", "tcp", "how the tire sensor receiver reaches the radio: tcp (share it) or exclusive (take it)")
 
 		fmFreq   = fs.String("fm-freq", "98.7M", "station the FM receiver starts on")
+		fmDir    = fs.String("fm-data", "data/fm", "directory for FM recordings")
 		airChans = fs.String("airband", "", "airband channels, e.g. \"Tower:118.3,Ground:121.9\"; the saved list is used when empty")
 		airSq    = fs.Float64("airband-squelch", 0.03, "carrier level an airband channel must reach to count as busy")
-		airDir   = fs.String("airband-data", "data/airband", "directory for the airband channel list")
+		airDir   = fs.String("airband-data", "data/airband", "directory for the airband channel list and recordings")
 		airFind  = fs.Bool("airband-discover", true, "on the first run, sweep the airband and add whatever is transmitting")
 		scanFrom = fs.String("scan-start", "88M", "start of the spectrum sweep")
 		scanTo   = fs.String("scan-stop", "1090M", "end of the spectrum sweep")
@@ -167,7 +168,7 @@ func Hub(args []string) {
 	}
 	fmApp, err := fm.New(fm.Config{
 		Freq: fmHz, Gain: *gain, PPM: *ppm, Device: *device,
-		Volume: 1, Deemph: "us",
+		Volume: 1, Deemph: "us", Dir: *fmDir,
 	})
 	if err != nil {
 		log.Fatalf("fm: %v", err)

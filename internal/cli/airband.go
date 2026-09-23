@@ -29,7 +29,7 @@ func Airband(args []string) {
 		tcpAddr = fs.String("rtltcp", "127.0.0.1:1234", "rtl_tcp address; one is started if nothing is listening")
 		addr    = fs.String("http", config.DefaultHTTPAddr, "address for the player and JSON API")
 		volume  = fs.Float64("volume", 1.0, "output gain multiplier")
-		dir     = fs.String("data", "data/airband", "directory for the channel list")
+		dir     = fs.String("data", "data/airband", "directory for the channel list and recordings")
 		find    = fs.Bool("discover", true, "on the first run, sweep the band and add whatever is transmitting")
 		speaker = fs.Bool("speaker", false, "also play through this machine's audio device")
 	)

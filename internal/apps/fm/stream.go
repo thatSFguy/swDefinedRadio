@@ -19,8 +19,9 @@ var webFS embed.FS
 
 func fsSub() (fs.FS, error) { return fs.Sub(webFS, "web") }
 
-func handler(ctx context.Context, st *station, b *audio.Broadcaster) (http.Handler, error) {
+func handler(ctx context.Context, st *station, b *audio.Broadcaster, rec *audio.Store, record func(bool) error) (http.Handler, error) {
 	mux := http.NewServeMux()
+	rec.Routes(mux)
 
 	// Live audio as a WAV stream, which every browser can play from an
 	// <audio> element without any client-side decoding.
@@ -63,7 +64,12 @@ func handler(ctx context.Context, st *station, b *audio.Broadcaster) (http.Handl
 
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		freq, level := st.get()
+		var recording any // null when not recording
+		if cur, ok := rec.Current(); ok {
+			recording = cur
+		}
 		web.WriteJSON(w, map[string]any{
+			"recording":  recording,
 			"freq_hz":    freq,
 			"level":      level,
 			"listeners":  b.Count(),
@@ -71,6 +77,29 @@ func handler(ctx context.Context, st *station, b *audio.Broadcaster) (http.Handl
 			"band_low":   uint32(BandLowHz),
 			"band_high":  uint32(BandHighHz),
 		})
+	})
+
+	mux.HandleFunc("POST /api/record", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			On bool `json:"on"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		switch err := record(req.On); {
+		case errors.Is(err, ErrNotOnAir):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var recording any
+		if cur, ok := rec.Current(); ok {
+			recording = cur
+		}
+		web.WriteJSON(w, map[string]any{"recording": recording})
 	})
 
 	mux.HandleFunc("POST /api/tune", func(w http.ResponseWriter, r *http.Request) {

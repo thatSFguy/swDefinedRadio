@@ -2,6 +2,7 @@ package airband
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -200,5 +201,111 @@ func TestTuningClearsTheHoldFromTheLastChannel(t *testing.T) {
 	defer a.mu.RUnlock()
 	if !a.lastBusy.IsZero() {
 		t.Error("the new channel inherited the old one's activity")
+	}
+}
+
+// While recording, each transmission becomes a clip, and the log entry
+// for it says which one — that is what lets the page play it back.
+func TestRecordingKeepsAClipPerTransmission(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.SetRecording(true)
+
+	a.mu.Lock()
+	name, err := a.rec.Start("121.500MHz Guard")
+	a.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.rec.Write(make([]int16, 48_000))
+	a.mu.Lock()
+	a.recordLocked(time.Second)
+	a.mu.Unlock()
+
+	st := a.State()
+	if !st.Recording {
+		t.Error("State does not say it is recording")
+	}
+	if len(st.Heard) != 1 || st.Heard[0].Clip != name {
+		t.Fatalf("heard = %+v, want one entry with clip %s", st.Heard, name)
+	}
+	if list, _ := a.rec.List(); len(list) != 1 {
+		t.Errorf("recordings = %v, want the one clip", list)
+	}
+}
+
+// A burst too short to log is static, and keeping a file of it would
+// bury the real transmissions.
+func TestRecordingDiscardsClicks(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.SetRecording(true)
+	if _, err := a.rec.Start("click"); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.recordLocked(100 * time.Millisecond)
+	a.mu.Unlock()
+	if list, _ := a.rec.List(); len(list) != 0 {
+		t.Errorf("a click was kept: %v", list)
+	}
+}
+
+// Moving off a channel mid-transmission — a click on another one — must
+// still finish the clip and log what was heard.
+func TestTuningAwayFinishesTheClip(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard}, Channel{Name: "Unicom", Hz: 122_800_000})
+	a.mu.Lock()
+	a.busy = true
+	a.since = time.Now().Add(-2 * time.Second)
+	a.mu.Unlock()
+	name, _ := a.rec.Start("121.500MHz Guard")
+	a.rec.Write(make([]int16, 1000))
+
+	_ = a.Tune(122_800_000) // off the air, so this only remembers the channel
+
+	if _, ok := a.rec.Current(); ok {
+		t.Error("the clip is still open after tuning away")
+	}
+	st := a.State()
+	if len(st.Heard) != 1 || st.Heard[0].Clip != name || st.Heard[0].Hz != Guard {
+		t.Errorf("heard = %+v, want the Guard transmission with clip %s", st.Heard, name)
+	}
+}
+
+// Clips made between pressing Record and releasing it are one session,
+// and the next press starts another.
+func TestRecordingGathersASession(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.SetRecording(true)
+	if a.rec.InSession() {
+		t.Error("a session was opened before anything was heard")
+	}
+	// What step does when the squelch opens while recording.
+	clip := func() string {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if !a.rec.InSession() {
+			a.rec.BeginSession("airband")
+		}
+		n, err := a.rec.Start("121.500MHz Guard")
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.rec.Stop()
+		return n
+	}
+	first, second := clip(), clip()
+	a.SetRecording(false)
+	if a.rec.InSession() {
+		t.Error("turning Record off left the session open")
+	}
+	a.SetRecording(true)
+	third := clip()
+
+	sess := func(n string) string { s, _, _ := strings.Cut(n, "/"); return s }
+	if sess(first) == "" || sess(first) != sess(second) {
+		t.Errorf("%s and %s should share a session", first, second)
+	}
+	if sess(third) == sess(first) {
+		t.Errorf("%s landed in the earlier session", third)
 	}
 }

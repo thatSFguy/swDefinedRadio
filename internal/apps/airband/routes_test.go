@@ -36,11 +36,21 @@ func TestEveryEndpointThePageCallsExists(t *testing.T) {
 	for _, m := range calls.FindAllStringSubmatch(string(page), -1) {
 		seen[m[1]] = true
 	}
+	// The page draws itself from its state poll; an edit that cut the
+	// poll left every card empty and nothing else failed.
+	if !seen["/api/state"] {
+		t.Error("the page never fetches /api/state, so it will never draw")
+	}
 	if len(seen) < 5 {
 		t.Fatalf("only found %d endpoints in the page; the pattern is wrong", len(seen))
 	}
 
 	for path := range seen {
+		// A path ending in a slash is a prefix the page completes with a
+		// name — deleting a recording — and there is no name to try here.
+		if strings.HasSuffix(path, "/") {
+			continue
+		}
 		// Everything the page posts to is a JSON endpoint; an empty body
 		// is enough to prove the route is there, since a missing one
 		// answers 404, or 405 where the file server matches the path but
