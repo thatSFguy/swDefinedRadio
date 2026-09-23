@@ -37,7 +37,38 @@ type SurveyStat struct {
 	// This is what tells the receiver's own 4.8 MHz harmonics from an
 	// aircraft, and a sweep measuring power once cannot do it at all.
 	Constant int `json:"constant"`
+
+	// Hits counts samples seen above this channel's own threshold.
+	//
+	// Catching a whole transmission needs the survey to be on the
+	// channel when one happens, and it is on each of 761 channels for a
+	// tenth of a second every two and a half minutes. A busy centre
+	// frequency carries traffic perhaps seven percent of the time, so
+	// whole transmissions turn up roughly never. A single sample above
+	// the channel's own noise is far more likely and says the same
+	// thing: something is transmitting here.
+	Hits int `json:"hits"`
+
+	// Floor is the quietest this channel has ever been, which is its own
+	// noise floor. It has to be measured per channel: across this band
+	// the floor varies by a factor of two, so one threshold for all of
+	// them is either deaf at the quiet end or, at the noisy end, open on
+	// nothing at all.
+	Floor float64 `json:"floor"`
 }
+
+// openRatio is how far above a channel's own noise floor the carrier
+// must sit to count as somebody transmitting. A real signal is several
+// times the floor; noise wanders around it.
+const openRatio = 1.8
+
+// minHits is how many separate moments above a channel's own noise are
+// needed before it is worth listening to. One is a stray sample; two
+// across different visits is a pattern.
+const minHits = 2
+
+// Threshold is the squelch this channel's own measurements imply.
+func (s SurveyStat) Threshold() float64 { return s.Floor * openRatio }
 
 // Grid is every channel in the band, which is what a survey walks.
 func Grid() []uint32 {
@@ -51,7 +82,10 @@ func Grid() []uint32 {
 // minTransmission is how long a squelch opening must last to count as
 // somebody talking. Shorter than this is a click, a noise burst, or the
 // squelch chattering on the edge of its threshold.
-const minTransmission = 600 * time.Millisecond
+// A survey arrives in the middle of a transmission and only sees what is
+// left of it, so this is lower than a whole one would be. Below about
+// this, though, it is a click of static or the threshold being grazed.
+const minTransmission = 350 * time.Millisecond
 
 // ResetSurvey throws away what was gathered and starts the scoring over.
 func (a *App) ResetSurvey() {
@@ -138,24 +172,57 @@ func (a *App) SurveyResults() []SurveyStat {
 
 	var out []SurveyStat
 	for _, s := range a.survey {
-		if s.Opens == 0 {
+		// Either a whole transmission, or enough separate moments above
+		// this channel's own noise to not be a single stray sample.
+		if s.Opens == 0 && s.Hits < minHits {
 			continue
 		}
 		// A channel that is usually a constant carrier is a spur that
 		// occasionally looked like it stopped, not a channel that is
 		// occasionally busy.
-		if s.Constant >= s.Opens {
+		//
+		// Weighed against all the evidence, not just whole
+		// transmissions: written as Constant >= Opens it threw away
+		// every channel found by its excursions, because nought is not
+		// less than nought.
+		if s.Constant > 0 && s.Constant >= s.Opens+s.Hits {
 			continue
 		}
 		out = append(out, *s)
 	}
-	// Most talked-on first: a channel with six transmissions on it is a
-	// better bet than one with a single four-second burst.
+	// Most evidence first, so the best bets are at the top of the list
+	// somebody is going to work through by ear.
 	slices.SortFunc(out, func(x, y SurveyStat) int {
-		if x.Opens != y.Opens {
-			return y.Opens - x.Opens
+		if a, b := x.Opens+x.Hits, y.Opens+y.Hits; a != b {
+			return b - a
 		}
 		return int(y.Secs*1000) - int(x.Secs*1000)
+	})
+	return out
+}
+
+// SurveyFloors is every channel that has been measured, quietest first.
+//
+// Worth being able to see: the threshold each channel is being judged
+// against is derived from its own noise, and if nothing is ever heard
+// the first question is whether those numbers are sensible.
+func (a *App) SurveyFloors() []SurveyStat {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]SurveyStat, 0, len(a.survey))
+	for _, s := range a.survey {
+		if s.Looks > 0 {
+			out = append(out, *s)
+		}
+	}
+	slices.SortFunc(out, func(x, y SurveyStat) int {
+		switch {
+		case x.Floor < y.Floor:
+			return -1
+		case x.Floor > y.Floor:
+			return 1
+		}
+		return 0
 	})
 	return out
 }
@@ -174,9 +241,17 @@ func (a *App) OfferSurveyed() []Channel {
 		if known || offered {
 			continue
 		}
+		what := fmt.Sprintf("%d hits", s.Hits)
+		if s.Opens > 0 {
+			what = fmt.Sprintf("%d heard", s.Opens)
+		}
 		fresh = append(fresh, Channel{
-			Name: fmt.Sprintf("%s (%d heard)", MHz(s.Hz), s.Opens),
+			Name: fmt.Sprintf("%s (%s)", MHz(s.Hz), what),
 			Hz:   s.Hz,
+			// Keep the threshold this channel was measured at, so it
+			// arrives already set for its own noise rather than the
+			// band's average.
+			Squelch: s.Threshold(),
 		})
 	}
 	a.candidates = append(a.candidates, fresh...)
@@ -184,19 +259,57 @@ func (a *App) OfferSurveyed() []Channel {
 	return fresh
 }
 
+// surveyOpen judges a channel against its own measured floor instead of
+// the receiver's fixed threshold.
+//
+// Until a channel has been visited a couple of times its floor is not
+// known, so nothing is scored on it — which is why a survey wants more
+// than one pass before its answers mean much.
+func (a *App) surveyOpen(st *SurveyStat) bool {
+	if st.Looks < 1 || st.Floor <= 0 {
+		return false
+	}
+	return a.am.Level() >= st.Threshold()
+}
+
 // surveyStep is the survey's half of the scan loop: score what was just
 // heard, then move to the next channel on the grid.
-func (a *App) surveyStep(now time.Time, open bool) {
+//
+// It decides for itself whether the channel is busy, against that
+// channel's own noise, and keeps its own flag for it. Sharing the
+// receiver's — which is a fixed threshold for the whole band — meant
+// deciding to stay on one test and scoring on another.
+func (a *App) surveyStep(now time.Time) {
 	st := a.survey[a.freq]
 	if st == nil {
 		st = &SurveyStat{Hz: a.freq}
 		a.survey[a.freq] = st
 	}
-	if lvl := a.am.Level(); lvl > st.Peak {
+	lvl := a.am.Level()
+	if lvl > st.Peak {
 		st.Peak = lvl
 	}
+	// The floor falls to whatever the quietest reading has been. A
+	// channel with traffic on it is still quiet between transmissions,
+	// so this converges on the noise rather than on the signal.
+	if st.Floor == 0 || lvl < st.Floor {
+		st.Floor = lvl
+	}
 
+	open := a.surveyOpen(st)
+	if open {
+		st.Hits++
+	}
 	held := now.Sub(a.since)
+
+	// Coming onto a busy channel starts the clock, so what gets measured
+	// is how long it stays busy rather than how long since the tuner
+	// moved.
+	if open && !a.busy {
+		a.since = now
+		a.busy = true
+		held = 0
+	}
 
 	if open {
 		if held < surveyMaxHold {
@@ -207,14 +320,21 @@ func (a *App) surveyStep(now time.Time, open bool) {
 		// survey ends here.
 		st.Constant++
 		st.Looks++
+		a.busy = false
 		a.advanceLocked()
 		return
 	}
 
 	// A channel that just went quiet is scored, then left.
-	if a.busy && held >= minTransmission && held < surveyMaxHold {
-		st.Opens++
-		st.Secs += held.Seconds()
+	if a.busy {
+		if held >= minTransmission && held < surveyMaxHold {
+			st.Opens++
+			st.Secs += held.Seconds()
+			a.recordLocked(held)
+		}
+		a.busy = false
+		a.since = now
+		return // give the channel a moment in case there is more
 	}
 	if held < surveyDwell {
 		return

@@ -576,16 +576,14 @@ func (a *App) step() {
 	}
 
 	open := a.am.Open()
+	// A survey judges a channel against its own measured noise, so it
+	// keeps its own idea of whether the channel is busy. Letting the
+	// receiver's fixed squelch set that flag underneath it was the bug
+	// that made channels three times their own noise floor score
+	// nothing: one test decided to stay, a different one decided
+	// whether anything had been heard.
 	if a.surveying {
-		if open != a.busy {
-			if open {
-				a.since = now
-			} else {
-				a.recordLocked(now.Sub(a.since))
-			}
-		}
-		a.surveyStep(now, open)
-		a.busy = open
+		a.surveyStep(now)
 		return
 	}
 	switch {

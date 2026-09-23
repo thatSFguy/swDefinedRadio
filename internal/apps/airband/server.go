@@ -142,7 +142,10 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 	})
 
 	mux.HandleFunc("GET /api/survey", func(w http.ResponseWriter, r *http.Request) {
-		web.WriteJSON(w, map[string]any{"heard": a.SurveyResults()})
+		web.WriteJSON(w, map[string]any{
+			"heard":  a.SurveyResults(),
+			"floors": a.SurveyFloors(),
+		})
 	})
 
 	mux.HandleFunc("POST /api/channel/squelch", func(w http.ResponseWriter, r *http.Request) {
