@@ -16,6 +16,7 @@ package hub
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -184,10 +185,19 @@ func (h *Hub) Select(id string) error {
 				h.setPhase(PhaseFailed, id, fmt.Sprint(p))
 			}
 		}()
-		if err := app.Run(ctx, hnd); err != nil && ctx.Err() == nil {
-			log.Printf("hub: %s stopped: %v", id, err)
-			h.setPhase(PhaseFailed, id, err.Error())
+		// A receiver that returns while it still holds the radio has
+		// stopped on its own, whether or not it called that an error —
+		// rtl_433 exiting quietly still leaves the tab saying it is on
+		// the air with nothing behind it.
+		err := app.Run(ctx, hnd)
+		if ctx.Err() != nil {
+			return // asked to stop
 		}
+		if err == nil {
+			err = errors.New("stopped on its own")
+		}
+		log.Printf("hub: %s stopped: %v", id, err)
+		h.setPhase(PhaseFailed, id, err.Error())
 	}()
 
 	h.setActive(id)

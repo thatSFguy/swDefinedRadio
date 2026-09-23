@@ -273,3 +273,30 @@ func TestStateReportsWhoHoldsTheRadio(t *testing.T) {
 		t.Error("state still says the radio is held after Release")
 	}
 }
+
+// Address mode hands a receiver the address of a server its own
+// subprocess will connect to. Starting that server is not the same as it
+// listening, and handing over an address nothing is bound to yet means
+// the subprocess is refused and gives up — which looked, from the
+// outside, like a receiver that was on the air and silent.
+//
+// So the address is only handed over once something has connected to it.
+func TestAddressModeProvesTheServerIsListening(t *testing.T) {
+	b, f := newTestBroker(t)
+	before := f.connections()
+
+	// Nothing has used the radio yet, which is the case that broke: the
+	// first tab selected was the one wanting an address.
+	h, err := b.Acquire(context.Background(), Need{Mode: Address})
+	if err != nil {
+		t.Fatalf("address: %v", err)
+	}
+	if h.Addr != f.addr {
+		t.Fatalf("handed over %q, want %q", h.Addr, f.addr)
+	}
+	if f.connections() == before {
+		t.Error("the address was handed over without anything having reached the server")
+	}
+	// and the broker is not holding the slot the receiver needs
+	waitFor(t, "the broker to let go", func() bool { return !f.hasClient() })
+}

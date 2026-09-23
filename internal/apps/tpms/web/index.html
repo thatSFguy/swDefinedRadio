@@ -37,6 +37,16 @@
   td:first-child, th:first-child, td:nth-child(2), th:nth-child(2) { text-align:left; }
   tbody tr { border-bottom:1px solid #21262d; }
   tbody tr:hover { background:#1c2230; }
+  th[data-k] { cursor:pointer; user-select:none; }
+  th[data-k]:hover { color:var(--fg); }
+  th[data-dir]::after { content:attr(data-dir); margin-left:3px; color:var(--accent); }
+  .tools { display:flex; align-items:center; gap:8px; margin:0 0 8px; }
+  .tools input {
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    color:var(--fg); font:inherit; font-size:12px; padding:4px 8px; min-width:190px;
+  }
+  .tools input:focus { border-color:var(--accent); outline:none; }
+  .tools .n { color:var(--dim); font-size:11px; }
   .mono { font-family:ui-monospace,SFMono-Regular,monospace; color:var(--dim); }
   .lo { color:var(--bad); font-weight:600; }
   .hi { color:var(--warn); }
@@ -77,10 +87,17 @@
 </div>
 
 <h2>All sensors</h2>
+<div class="tools">
+  <input id="filter" type="search" placeholder="filter sensors…"
+         title="matches the label, the sensor and the vehicle">
+  <span class="n" id="s-shown"></span>
+</div>
 <table>
   <thead><tr>
-    <th>Label</th><th>Sensor</th><th>Vehicle</th><th>PSI</th><th>°C</th>
-    <th>Batt</th><th>Check</th><th>Seen</th><th>Last</th>
+    <th data-k="label">Label</th><th data-k="key">Sensor</th>
+    <th data-k="vehicle">Vehicle</th><th data-k="psi">PSI</th><th data-k="temp">°C</th>
+    <th data-k="batt">Batt</th><th data-k="check">Check</th>
+    <th data-k="count">Seen</th><th data-k="last">Last</th>
   </tr></thead>
   <tbody id="sensors"></tbody>
 </table>
@@ -181,7 +198,7 @@ async function assign(sensorKey, vehicle) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sensor: sensorKey, vehicle }),
   });
-  refresh();
+  poll();
 }
 
 function vehiclePicker(s, vehicles, vname) {
@@ -202,15 +219,61 @@ function vehiclePicker(s, vehicles, vname) {
   }
   opt('alone', 'on its own', pinned === 'alone');
 
-  sel.onchange = () => assign(s.key, sel.value);
+  // An open dropdown is destroyed if the table is rebuilt under it, which
+  // is what made this hard to use: the rows are re-sorted every couple of
+  // seconds as sensors are heard. The page already holds off while a
+  // label is being typed; borrow the same flag.
+  sel.onfocus = () => { editing = 'assign:' + s.key; };
+  sel.onblur = () => { editing = null; };
+  sel.onchange = () => { editing = null; assign(s.key, sel.value); };
   return sel;
+}
+
+// The table is rebuilt on every poll, and the server hands sensors back
+// most-recently-heard first — so a wheel transmitting moved rows under
+// the pointer, and replacing them shut any dropdown that was open. Sort
+// here instead, stably, and leave the table alone while it is being used.
+let sortKey = 'key', sortDir = 1, filter = '';
+
+function sortValue(s, key, vname, now) {
+  switch (key) {
+    case 'label':   return (s.label || '').toLowerCase();
+    case 'key':     return s.key.toLowerCase();
+    case 'vehicle': return (s.vehicle ? (vname.get(s.vehicle) || s.vehicle) : '').toLowerCase();
+    case 'psi':     return s.has_pressure ? s.pressure_kpa : null;
+    case 'temp':    return s.has_temperature ? s.temperature_c : null;
+    case 'batt':    return s.battery_ok === undefined ? null : (s.battery_ok ? 1 : 0);
+    case 'check':   return (s.integrity || '').toLowerCase();
+    case 'count':   return s.count;
+    case 'last':    return new Date(s.last_seen).getTime();
+  }
+  return '';
+}
+
+function matches(s, vname) {
+  if (!filter) return true;
+  const hay = [s.label, s.key, s.model, s.id,
+               s.vehicle ? (vname.get(s.vehicle) || s.vehicle) : ''].join(' ').toLowerCase();
+  return hay.includes(filter);
 }
 
 function renderSensors(sensors, vehicles, now) {
   $('s-empty').style.display = sensors.length ? 'none' : '';
   const vname = new Map(vehicles.map(v => [v.id, v.label || v.id.split('/')[1] || v.id]));
 
-  $('sensors').replaceChildren(...sensors.map(s => {
+  const shown = sensors.filter(s => matches(s, vname));
+  $('s-shown').textContent = shown.length === sensors.length
+    ? '' : `${shown.length} of ${sensors.length}`;
+
+  shown.sort((x, y) => {
+    const a = sortValue(x, sortKey, vname, now), b = sortValue(y, sortKey, vname, now);
+    // A sensor with nothing in the sorted column sinks either way.
+    if (a === null || a === '') return 1;
+    if (b === null || b === '') return -1;
+    return (a > b ? 1 : a < b ? -1 : 0) * sortDir;
+  });
+
+  $('sensors').replaceChildren(...shown.map(s => {
     const tr = document.createElement('tr');
     const psi = s.has_pressure ? (s.pressure_kpa / 6.894757) : null;
 
@@ -268,6 +331,22 @@ async function poll() {
   }
 }
 poll();
+document.querySelectorAll('th[data-k]').forEach(th => {
+  th.onclick = () => {
+    const k = th.dataset.k;
+    sortDir = (k === sortKey) ? -sortDir : 1;
+    sortKey = k;
+    document.querySelectorAll('th[data-k]').forEach(o => o.removeAttribute('data-dir'));
+    th.dataset.dir = sortDir > 0 ? '▲' : '▼';
+    poll();
+  };
+});
+
+$('filter').oninput = () => {
+  filter = $('filter').value.trim().toLowerCase();
+  poll();
+};
+
 setInterval(poll, 2000);
 </script>
 </body>

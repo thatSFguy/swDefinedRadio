@@ -224,6 +224,10 @@ const drainQuiet = 3 * time.Millisecond
 // its own, whereas a slow tab switch is felt every time.
 const drainBudget = 250 * time.Millisecond
 
+// handoverPause is how long to let rtl_tcp return to accepting after our
+// own connection is dropped, before telling a receiver to connect.
+const handoverPause = 150 * time.Millisecond
+
 const (
 	defaultAddr   = "127.0.0.1:1234"
 	defaultSettle = 180 * time.Millisecond
@@ -281,9 +285,21 @@ func (b *Broker) Acquire(ctx context.Context, n Need) (Handle, error) {
 		if err := b.ensureServer(n.Tune); err != nil {
 			return Handle{}, err
 		}
-		// rtl_tcp serves one client at a time, so ours has to go before
-		// the receiver's subprocess can be heard.
+		// Starting the server is not the same as the server listening,
+		// and handing over an address nothing is bound to yet means the
+		// receiver's subprocess is refused and gives up. Connecting
+		// once proves it is ready; the connection is then dropped,
+		// because rtl_tcp serves one client at a time and that one has
+		// to be the receiver's.
+		if _, err := b.ensureConn(n.Tune); err != nil {
+			return Handle{}, err
+		}
 		b.dropConn()
+		// Let the server reap that connection and get back to accepting
+		// before the receiver's subprocess tries. The kernel's backlog
+		// covers this in practice, but a client that does not retry —
+		// rtl_433 gives up on the first refusal — deserves the margin.
+		time.Sleep(handoverPause)
 		b.mode, b.held = Address, true
 		return Handle{Addr: b.o.Addr}, nil
 

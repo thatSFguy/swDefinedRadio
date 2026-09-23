@@ -205,10 +205,12 @@ function render(st) {
   }
 
   const r = st.radio || {};
+  // A receiver that drives its own subprocess sets the rate itself, so
+  // the hub does not know it — but the radio is being used, and saying
+  // "idle" while a receiver is decoding is simply wrong.
   const rate = r.sample_rate;
-  $radio.innerHTML = r.running
-    ? 'radio <b>' + (rate ? (rate / 1e6).toFixed(3) + ' Msps' : 'idle') + '</b>'
-    : 'radio <b>stopped</b>';
+  const state = rate ? (rate / 1e6).toFixed(3) + ' Msps' : (r.held ? 'in use' : 'idle');
+  $radio.innerHTML = r.running ? 'radio <b>' + state + '</b>' : 'radio <b>stopped</b>';
 
   document.title = active && phase === 'on_air' ? nameOf(active) + ' · SDR' : 'SDR';
 
