@@ -59,6 +59,17 @@ jobs:
           # says something specific rather than repeating the same
           # standing description every time. What it is and how to
           # install it follows, since that is true of every release.
+          #
+          # The checkout leaves tags as lightweight refs, and asking one
+          # of those for its contents quietly hands back the *commit*
+          # message instead — which looks plausible and is wrong. Fetch
+          # the real tag objects, then refuse to guess if the tag turns
+          # out not to be annotated after all.
+          git fetch --force --tags --quiet
+          if ! git rev-parse --quiet --verify "${GITHUB_REF_NAME}^{tag}" > /dev/null; then
+            echo "::error::${GITHUB_REF_NAME} is not an annotated tag; release notes would be a commit message. Tag with -a."
+            exit 1
+          fi
           {
             git tag -l --format='%(contents)' "${GITHUB_REF_NAME}"
             echo
