@@ -118,6 +118,7 @@
   .ahead button:hover { color: var(--fg); border-color: var(--dim); }
   .ahead button[aria-pressed="true"] { color: var(--alert); border-color: var(--alert); }
   #alist { list-style: none; margin: 0; padding: 0; max-height: 148px; overflow-y: auto; }
+  #alist li.quiet { color: var(--dim); font-style: italic; cursor: default; }
   #alist li {
     display: flex; gap: 8px; align-items: baseline; cursor: pointer;
     padding: 4px 14px; border-top: 1px solid #1b212b; font-size: 12px;
@@ -736,12 +737,28 @@ function alertText(a) {
   return bits.join(' · ') || (a.note || '');
 }
 
-function showAlerts(list) {
+function showAlerts(list, watching, rules) {
   const panel = document.getElementById('alerts');
   const ul = document.getElementById('alist');
   const shown = list.filter(a => !cleared || a.at > cleared);
-  panel.hidden = shown.length === 0;
+
+  // Stay visible whenever anything is being watched, even with nothing
+  // to show. Sound and Notify live in here, and they are the sort of
+  // thing you want to switch on *before* something happens — a
+  // notification you can only arm after the first alert has already been
+  // and gone is no notification at all.
+  panel.hidden = !watching && shown.length === 0;
   document.getElementById('a-n').textContent = shown.length;
+
+  if (!shown.length) {
+    const li = document.createElement('li');
+    li.className = 'quiet';
+    li.textContent = rules
+      ? `watching ${rules} rule${rules === 1 ? '' : 's'} — nothing yet`
+      : 'nothing yet';
+    ul.replaceChildren(li);
+    return;
+  }
 
   ul.replaceChildren(...shown.slice(0, 60).map(a => {
     const li = document.createElement('li');
@@ -773,7 +790,7 @@ async function pollAlerts() {
     f.urgent = f.urgent || a.urgent;
     flagged.set(a.hex, f);
   }
-  showAlerts(data.alerts);
+  showAlerts(data.alerts, data.watching, (data.rules || []).length);
 
   // Announce only what has arrived since the last poll, and only once.
   const fresh = data.alerts.filter(a => (!alertsSeen || a.at > alertsSeen) && (!cleared || a.at > cleared));
