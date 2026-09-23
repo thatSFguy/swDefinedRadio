@@ -53,15 +53,37 @@ func Grid() []uint32 {
 // squelch chattering on the edge of its threshold.
 const minTransmission = 600 * time.Millisecond
 
-// StartSurvey begins walking the grid, keeping score.
+// ResetSurvey throws away what was gathered and starts the scoring over.
+func (a *App) ResetSurvey() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.survey = map[uint32]*SurveyStat{}
+	a.surveyAt = time.Time{}
+}
+
+// StartSurvey begins walking the grid, keeping score. It resumes rather
+// than restarts: evidence accumulates across however many times it is
+// stopped to listen to something.
 func (a *App) StartSurvey() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.surveying = true
 	a.scanning = false
-	a.survey = map[uint32]*SurveyStat{}
-	a.surveyAt = time.Now()
-	_ = a.tuneLocked(BandLowHz)
+	// Keep whatever has been gathered. Stopping to listen to a candidate
+	// and starting again is the ordinary way to use this, and throwing
+	// the evidence away each time would punish exactly that.
+	if a.survey == nil {
+		a.survey = map[uint32]*SurveyStat{}
+	}
+	if a.surveyAt.IsZero() {
+		a.surveyAt = time.Now()
+	}
+	// Carry on from where it was rather than starting at the bottom of
+	// the band again, or the channels near 118 get surveyed repeatedly
+	// and the ones near 137 never do.
+	if a.freq < BandLowHz || a.freq > BandHighHz {
+		_ = a.tuneLocked(BandLowHz)
+	}
 }
 
 // StopSurvey ends it, leaving what was gathered.

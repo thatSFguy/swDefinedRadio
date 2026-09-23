@@ -288,7 +288,12 @@ func (a *App) Tune(hz uint32) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Choosing a channel means listening to that channel. Both of the
+	// things that move the tuner on their own have to stop, not just the
+	// scan — a survey walking the grid would retune within a tenth of a
+	// second and the click would appear to do nothing.
 	a.scanning = false
+	a.surveying = false
 	return a.tuneLocked(hz)
 }
 

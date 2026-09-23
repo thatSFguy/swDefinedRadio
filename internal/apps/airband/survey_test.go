@@ -180,3 +180,70 @@ func TestConstantCarriersAreNotOffered(t *testing.T) {
 			MHz(got[0].Hz))
 	}
 }
+
+// Choosing a channel to listen to has to stop everything that moves the
+// tuner by itself. Stopping only the scan left a survey walking the grid
+// underneath, which retuned within a tenth of a second — so the click
+// appeared to do nothing at all.
+func TestTuningStopsASurveyToo(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.StartSurvey()
+	if !a.State().Survey.Running {
+		t.Fatal("the survey did not start")
+	}
+
+	_ = a.Tune(120_825_000)
+
+	st := a.State()
+	if st.Survey.Running {
+		t.Error("the survey is still walking the grid after a channel was chosen")
+	}
+	if st.Scanning {
+		t.Error("still scanning after a channel was chosen")
+	}
+	if st.Freq != 120_825_000 {
+		t.Errorf("tuned to %s", MHz(st.Freq))
+	}
+}
+
+// Stopping to listen and starting again is the ordinary way to use this,
+// so the evidence has to survive it.
+func TestResumingASurveyKeepsWhatWasGathered(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.StartSurvey()
+	a.mu.Lock()
+	a.survey[118_200_000] = &SurveyStat{Hz: 118_200_000, Opens: 3, Looks: 9}
+	a.mu.Unlock()
+
+	_ = a.Tune(118_500_000) // stops it, to listen to something
+	a.StartSurvey()         // and back
+
+	if got := a.SurveyResults(); len(got) != 1 || got[0].Opens != 3 {
+		t.Errorf("after resuming: %v, want the three transmissions still counted", got)
+	}
+}
+
+// Resuming should carry on from where it stopped, or the low end of the
+// band is surveyed over and over and the high end never is.
+func TestResumingCarriesOnFromWhereItWas(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.StartSurvey()
+	_ = a.Tune(130_000_000)
+	a.StartSurvey()
+	if got := a.State().Freq; got != 130_000_000 {
+		t.Errorf("resumed at %s, want where it left off", MHz(got))
+	}
+}
+
+// And starting over is a separate, deliberate act.
+func TestResetClearsTheScores(t *testing.T) {
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
+	a.mu.Lock()
+	a.survey = map[uint32]*SurveyStat{118_200_000: {Hz: 118_200_000, Opens: 3}}
+	a.mu.Unlock()
+
+	a.ResetSurvey()
+	if got := a.SurveyResults(); len(got) != 0 {
+		t.Errorf("%d results survived a reset", len(got))
+	}
+}

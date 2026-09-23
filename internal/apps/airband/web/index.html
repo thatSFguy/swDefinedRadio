@@ -112,7 +112,7 @@
   <div class="meterlbl"><span id="status" class="idle">idle</span><span id="lvl">0.00</span></div>
 
   <div class="row">
-    <button class="go" id="listen">▶ Listen</button>
+    <button class="go" id="listen" title="turn the audio on or off">Audio on</button>
     <button id="scan">Scan</button>
   </div>
   <div class="row">
@@ -124,10 +124,11 @@
 </div>
 
 <div class="card" id="foundcard" hidden>
-  <h1>Found by sweeping</h1>
+  <h1>Heard while surveying</h1>
   <p class="note">
-    A sweep only proves something was transmitting. Listen to each one —
-    if there is speech, it is worth keeping.
+    Listening to one pauses the survey and turns the audio on. If there is
+    speech, keep it; if there is hiss, discard it. Resume the survey
+    afterwards — it carries on from where it stopped.
   </p>
   <ul class="cand" id="candidates"></ul>
 </div>
@@ -143,7 +144,8 @@
   <div class="row">
     <button id="survey">Survey the band</button>
     <button id="offer" hidden>Show what was heard</button>
-    <span class="sq" id="sweepnote">listens to every channel in turn and scores what talks</span>
+    <button id="resurvey" hidden title="throw away what was gathered and score again">Start over</button>
+    <span class="sq" id="surveynote">listens to every channel in turn and scores what talks</span>
   </div>
   <div class="err" id="cerr"></div>
 </div>
@@ -208,12 +210,17 @@ $('survey').onclick = async () => {
   if (d) { state = d; draw(); }
 };
 
+$('resurvey').onclick = async () => {
+  const d = await post('/api/survey/reset', {});
+  if (d) { state = d; draw(); }
+};
+
 $('offer').onclick = async () => {
   const d = await post('/api/survey/offer', {});
   if (d) {
     state = d.state;
     const n = (d.found || []).length;
-    $('sweepnote').textContent = n
+    $('surveynote').textContent = n
       ? 'offered ' + n + ' — listen to them below'
       : 'nothing new to offer yet';
     draw();
@@ -262,8 +269,9 @@ function candidateRow(c) {
 
   const listen = document.createElement('button');
   listen.textContent = here ? '● listening' : 'Listen';
+  listen.title = 'tune here, pause the survey, and turn the audio on';
   listen.disabled = here;
-  listen.onclick = () => tune(c.hz);
+  listen.onclick = () => tune(c.hz, true);
 
   const name = document.createElement('input');
   name.type = 'text';
@@ -285,9 +293,21 @@ function candidateRow(c) {
   return li;
 }
 
-async function tune(hz) {
+// Tuning somewhere in order to hear it should turn the audio on. Having
+// to press a second button in another panel, one that also says Listen
+// and means something else, is one click too many for one intention.
+function audioOn() {
+  if (playing) return;
+  const a = $('audio');
+  a.src = '/audio.wav?t=' + Date.now();
+  a.play().then(() => { playing = true; draw(); })
+          .catch(e => { $('cerr').textContent = 'audio: ' + e.message; });
+}
+
+async function tune(hz, listen) {
   const d = await post('/api/tune', { freq_hz: hz });
   if (d) { state = d; draw(); }
+  if (listen) audioOn();
 }
 
 function draw() {
@@ -314,20 +334,23 @@ function draw() {
   $('scan').className = state.scanning ? 'on' : '';
   // A survey takes minutes, so it has to say where it has got to.
   const sv = state.survey || {};
-  $('survey').textContent = sv.running ? '■ Stop survey' : 'Survey the band';
+  const been = sv.looked > 0;
+  $('survey').textContent = sv.running ? '■ Pause survey'
+                                       : (been ? 'Resume survey' : 'Survey the band');
+  $('resurvey').hidden = sv.running || !been;
   $('survey').className = sv.running ? 'on' : '';
   $('survey').disabled = !state.on_air;
   $('offer').hidden = !sv.found;
   $('offer').textContent = 'Show ' + sv.found + ' heard';
   if (sv.running) {
-    $('sweepnote').textContent =
+    $('surveynote').textContent =
       sv.looked + ' of ' + sv.total + ' channels · ' + sv.passes.toFixed(1) +
       ' passes · heard on ' + sv.found + ' · ' + Math.round(sv.seconds) + 's';
   } else if (!sv.found) {
-    $('sweepnote').textContent = 'listens to every channel in turn and scores what talks';
+    $('surveynote').textContent = 'listens to every channel in turn and scores what talks';
   }
-  $('listen').textContent = playing ? '■ Stop' : '▶ Listen';
-  $('listen').className = playing ? '' : 'go';
+  $('listen').textContent = playing ? 'Audio off' : 'Audio on';
+  $('listen').className = playing ? 'on' : 'go';
   if (document.activeElement !== $('squelch')) {
     $('squelch').value = state.squelch;
     $('sqv').textContent = state.squelch.toFixed(3);

@@ -130,6 +130,11 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 		web.WriteJSON(w, a.State())
 	})
 
+	mux.HandleFunc("POST /api/survey/reset", func(w http.ResponseWriter, r *http.Request) {
+		a.ResetSurvey()
+		web.WriteJSON(w, a.State())
+	})
+
 	// What the survey heard, offered as candidates to listen to.
 	mux.HandleFunc("POST /api/survey/offer", func(w http.ResponseWriter, r *http.Request) {
 		found := a.OfferSurveyed()
