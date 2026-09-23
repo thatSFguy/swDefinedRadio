@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airband</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#f0883e; --bad:#f85149;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body {
+    margin:0; padding:22px 16px; background:var(--bg); color:var(--fg);
+    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:16px;
+  }
+  .card {
+    width:100%; max-width:620px; background:var(--panel);
+    border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+  }
+  h1 { margin:0 0 14px; font-size:13px; font-weight:600; color:var(--dim);
+       text-transform:uppercase; letter-spacing:.8px; }
+
+  .dial { display:flex; align-items:baseline; justify-content:center; gap:10px; }
+  .freq { font-size:46px; font-weight:650; font-variant-numeric:tabular-nums; line-height:1; }
+  .unit { color:var(--dim); font-size:14px; }
+  .who { text-align:center; color:var(--accent); font-size:13px; min-height:20px; margin-top:2px; }
+
+  .meter { height:6px; background:#0b0f14; border-radius:3px; overflow:hidden; margin:14px 0 3px;
+           position:relative; }
+  .meter i { display:block; height:100%; width:0; background:linear-gradient(90deg,#1f6feb,#3fb950);
+             transition:width .12s; }
+  .meter u { position:absolute; top:-3px; width:2px; height:12px; background:var(--warn); }
+  .meterlbl { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
+  .live { color:var(--ok); font-weight:600; }
+  .idle { color:var(--dim); }
+
+  .row { display:flex; gap:10px; align-items:center; margin-top:16px; flex-wrap:wrap; }
+  button {
+    background:#21262d; color:var(--fg); border:1px solid var(--line); border-radius:8px;
+    font:inherit; font-size:13px; padding:8px 16px; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--dim); }
+  button.go { background:#1f6feb; border-color:#1f6feb; color:#fff; font-weight:650; }
+  button.go:hover { background:#2b7ef5; }
+  button.on { color:var(--accent); border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  input[type=range] { flex:1; min-width:120px; accent-color:var(--accent); }
+  .sq { color:var(--dim); font-size:11px; font-variant-numeric:tabular-nums; min-width:62px; }
+
+  ul { list-style:none; margin:0; padding:0; }
+  .ch li {
+    display:flex; align-items:center; gap:9px; padding:6px 8px; border-radius:7px;
+    border:1px solid transparent; cursor:pointer;
+  }
+  .ch li:hover { background:#1c2230; }
+  .ch li.on { border-color:var(--accent); background:#161b22; }
+  .ch li.busy { border-color:var(--ok); }
+  .ch .n { flex:1; }
+  .ch .f { color:var(--dim); font-variant-numeric:tabular-nums; font-size:12px; }
+  .ch .x { color:var(--dim); border:0; background:none; padding:2px 6px; font-size:14px; cursor:pointer; }
+  .ch .x:hover { color:var(--bad); }
+  .dot { width:7px; height:7px; border-radius:50%; background:#30363d; flex:none; }
+  .dot.on { background:var(--ok); }
+
+  .add { display:flex; gap:8px; margin-top:10px; }
+  .add input[type=text] {
+    background:var(--bg); border:1px solid var(--line); border-radius:7px; color:var(--fg);
+    font:inherit; font-size:13px; padding:6px 9px; min-width:0;
+  }
+  .add input.name { flex:1; }
+  .add input.hz { width:96px; font-variant-numeric:tabular-nums; }
+
+  .heard li { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #21262d;
+              color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  .heard .t { color:var(--dim); }
+  .heard .w { color:var(--fg); flex:1; }
+  .empty { color:var(--dim); font-size:12px; padding:10px 0; font-style:italic; }
+  .err { color:var(--bad); font-size:12px; min-height:18px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Airband receiver</h1>
+  <div class="dial"><span class="freq" id="freq">—</span><span class="unit">MHz</span></div>
+  <div class="who" id="who"></div>
+
+  <div class="meter"><i id="sig"></i><u id="sqmark" hidden></u></div>
+  <div class="meterlbl"><span id="status" class="idle">idle</span><span id="lvl">0.00</span></div>
+
+  <div class="row">
+    <button class="go" id="listen">▶ Listen</button>
+    <button id="scan">Scan</button>
+  </div>
+  <div class="row">
+    <span class="sq">squelch</span>
+    <input type="range" id="squelch" min="0" max="0.5" step="0.005">
+    <span class="sq" id="sqv">0.000</span>
+  </div>
+  <audio id="audio" hidden></audio>
+</div>
+
+<div class="card">
+  <h1>Channels</h1>
+  <ul class="ch" id="channels"></ul>
+  <div class="add">
+    <input type="text" class="name" id="cname" placeholder="name, e.g. Tower">
+    <input type="text" class="hz" id="chz" placeholder="118.30">
+    <button id="cadd">Add</button>
+  </div>
+  <div class="err" id="cerr"></div>
+</div>
+
+<div class="card">
+  <h1>Heard</h1>
+  <ul class="heard" id="heard"></ul>
+  <div class="empty" id="hempty">Nothing yet. Channels are quiet until somebody keys up.</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = null, playing = false, editing = false;
+
+const mhz = hz => (hz / 1e6).toFixed(3);
+
+async function post(path, body) {
+  $('cerr').textContent = '';
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { $('cerr').textContent = (await r.text()).trim(); return null; }
+    return await r.json();
+  } catch (e) {
+    $('cerr').textContent = String(e.message || e);
+    return null;
+  }
+}
+
+$('listen').onclick = () => {
+  const a = $('audio');
+  if (playing) {
+    a.pause(); a.removeAttribute('src'); a.load();
+    playing = false;
+  } else {
+    // The query string defeats the cache: without it a second Listen
+    // replays the connection that has already ended.
+    a.src = '/audio.wav?t=' + Date.now();
+    a.play().catch(e => { $('cerr').textContent = 'audio: ' + e.message; });
+    playing = true;
+  }
+  draw();
+};
+
+$('scan').onclick = async () => {
+  const d = await post('/api/scan', { scanning: !(state && state.scanning) });
+  if (d) { state = d; draw(); }
+};
+
+$('squelch').oninput = () => { $('sqv').textContent = (+$('squelch').value).toFixed(3); };
+$('squelch').onchange = async () => {
+  const d = await post('/api/squelch', { squelch: +$('squelch').value });
+  if (d) { state = d; draw(); }
+};
+
+$('cadd').onclick = addChannel;
+$('chz').onkeydown = e => { if (e.key === 'Enter') addChannel(); };
+$('cname').onkeydown = e => { if (e.key === 'Enter') $('chz').focus(); };
+
+async function addChannel() {
+  const hz = parseFloat($('chz').value);
+  if (!hz) { $('cerr').textContent = 'a frequency is needed, like 118.30'; return; }
+  const list = (state ? state.channels : []).slice();
+  list.push({ name: $('cname').value.trim(), hz: Math.round(hz < 1000 ? hz * 1e6 : hz) });
+  const d = await post('/api/channels', { channels: list });
+  if (d) { state = d; $('cname').value = ''; $('chz').value = ''; draw(); }
+}
+
+async function removeChannel(hz) {
+  const list = state.channels.filter(c => c.hz !== hz);
+  const d = await post('/api/channels', { channels: list });
+  if (d) { state = d; draw(); }
+}
+
+async function tune(hz) {
+  const d = await post('/api/tune', { freq_hz: hz });
+  if (d) { state = d; draw(); }
+}
+
+function draw() {
+  if (!state) return;
+  $('freq').textContent = mhz(state.freq_hz);
+  $('who').textContent = state.name || '';
+
+  // The meter is scaled to the squelch rather than to full scale: what
+  // matters is whether this is above the threshold, not what fraction of
+  // the ADC it happens to be using.
+  const top = Math.max(state.squelch * 2, 0.2);
+  $('sig').style.width = Math.min(100, (state.level / top) * 100) + '%';
+  $('lvl').textContent = state.level.toFixed(3);
+  const mark = $('sqmark');
+  mark.hidden = !state.squelch;
+  if (state.squelch) mark.style.left = Math.min(99, (state.squelch / top) * 100) + '%';
+
+  const st = $('status');
+  if (!state.on_air) { st.textContent = 'the radio is on another receiver'; st.className = 'idle'; }
+  else if (state.busy) { st.textContent = '● receiving'; st.className = 'live'; }
+  else if (state.scanning) { st.textContent = 'scanning'; st.className = 'idle'; }
+  else { st.textContent = 'quiet'; st.className = 'idle'; }
+
+  $('scan').className = state.scanning ? 'on' : '';
+  $('listen').textContent = playing ? '■ Stop' : '▶ Listen';
+  $('listen').className = playing ? '' : 'go';
+  if (document.activeElement !== $('squelch')) {
+    $('squelch').value = state.squelch;
+    $('sqv').textContent = state.squelch.toFixed(3);
+  }
+
+  if (!editing) {
+    $('channels').replaceChildren(...state.channels.map(c => {
+      const li = document.createElement('li');
+      li.className = (c.hz === state.freq_hz ? 'on ' : '') +
+                     (c.hz === state.freq_hz && state.busy ? 'busy' : '');
+      const dot = document.createElement('span');
+      dot.className = 'dot' + (c.hz === state.freq_hz && state.busy ? ' on' : '');
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = c.name;
+      const f = document.createElement('span'); f.className = 'f'; f.textContent = mhz(c.hz);
+      const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
+      x.title = 'remove this channel';
+      x.onclick = e => { e.stopPropagation(); removeChannel(c.hz); };
+      li.onclick = () => tune(c.hz);
+      li.title = 'listen to this channel, and stop scanning';
+      li.append(dot, n, f, x);
+      return li;
+    }));
+  }
+
+  const heard = state.heard || [];
+  $('hempty').hidden = heard.length > 0;
+  $('heard').replaceChildren(...heard.slice(0, 40).map(h => {
+    const li = document.createElement('li');
+    const t = document.createElement('span'); t.className = 't';
+    t.textContent = new Date(h.at).toTimeString().slice(0, 8);
+    const w = document.createElement('span'); w.className = 'w';
+    w.textContent = (h.name || mhz(h.hz)) + ' · ' + mhz(h.hz);
+    const d = document.createElement('span');
+    d.textContent = h.seconds.toFixed(1) + 's';
+    li.append(t, w, d);
+    return li;
+  }));
+}
+
+$('cname').onfocus = $('chz').onfocus = () => { editing = true; };
+$('cname').onblur = $('chz').onblur = () => { editing = false; };
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state');
+    if (r.ok) { state = await r.json(); draw(); }
+  } catch (e) { /* the next tick will do */ }
+}
+poll();
+setInterval(poll, 700);
+</script>
+</body>
+</html>

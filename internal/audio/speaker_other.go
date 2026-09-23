@@ -1,6 +1,6 @@
 //go:build !linux
 
-package fm
+package audio
 
 import "os"
 

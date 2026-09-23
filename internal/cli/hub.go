@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/adsb"
+	"github.com/thatSFguy/swDefinedRadio/internal/apps/airband"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/fm"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/scanner"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/tpms"
@@ -62,6 +63,9 @@ func Hub(args []string) {
 		tpmsMode  = fs.String("tpms-mode", "tcp", "how the tire sensor receiver reaches the radio: tcp (share it) or exclusive (take it)")
 
 		fmFreq   = fs.String("fm-freq", "98.7M", "station the FM receiver starts on")
+		airChans = fs.String("airband", "", "airband channels, e.g. \"Tower:118.3,Ground:121.9\"; the saved list is used when empty")
+		airSq    = fs.Float64("airband-squelch", 0.06, "carrier level an airband channel must reach to count as busy")
+		airDir   = fs.String("airband-data", "data/airband", "directory for the airband channel list")
 		scanFrom = fs.String("scan-start", "88M", "start of the spectrum sweep")
 		scanTo   = fs.String("scan-stop", "1090M", "end of the spectrum sweep")
 
@@ -168,13 +172,28 @@ func Hub(args []string) {
 		log.Fatalf("fm: %v", err)
 	}
 
+	var airChannels []airband.Channel
+	if *airChans != "" {
+		airChannels, err = airband.ParseChannels(*airChans)
+		if err != nil {
+			log.Fatalf("-airband: %v", err)
+		}
+	}
+	airApp, err := airband.New(airband.Config{
+		Channels: airChannels, Gain: *gain, PPM: *ppm, Device: *device,
+		Squelch: *airSq, Volume: 1, Dir: *airDir,
+	})
+	if err != nil {
+		log.Fatalf("airband: %v", err)
+	}
+
 	broker := radio.New(ctx, radio.Options{
 		Addr: *tcpAddr, Device: *device, Settle: *settle,
 	})
 	defer broker.Close()
 
 	h, err := hub.New(ctx, broker,
-		hub.Receivers(adsbApp, uatApp, tpmsApp, mode, scanApp, fmApp))
+		hub.Receivers(adsbApp, uatApp, tpmsApp, mode, scanApp, fmApp, airApp))
 	if err != nil {
 		log.Fatalf("hub: %v", err)
 	}

@@ -17,7 +17,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,7 +112,7 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 	defer a.audio.Drop()
 
 	if a.cfg.Speaker {
-		if err := startSpeaker(ctx, a.audio); err != nil {
+		if err := audio.Speaker(ctx, a.audio); err != nil {
 			log.Printf("speaker: %v (the stream still works)", err)
 		} else {
 			log.Print("playing through this machine's audio device")
@@ -218,37 +217,6 @@ func (a *App) receive(ctx context.Context, src sdr.Source) {
 		a.st.setLevel(fm.Level())
 		a.audio.Send(pcm[:k])
 	}
-}
-
-// startSpeaker pipes audio to sox, which is the one tool present on both
-// a normal desktop and WSL. Failure is not fatal: the browser stream is
-// the primary output.
-func startSpeaker(ctx context.Context, b *audio.Broadcaster) error {
-	cmd := exec.CommandContext(ctx, "play", "-q",
-		"-t", "raw", "-r", strconv.Itoa(demod.AudioRate),
-		"-e", "signed", "-b", "16", "-c", "1", "-")
-	cmd.Env = speakerEnv()
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start sox (is it installed?): %w", err)
-	}
-
-	ch := b.Subscribe()
-	go func() {
-		defer in.Close()
-		defer b.Unsubscribe(ch)
-		buf := make([]byte, 0, 8192)
-		for block := range ch {
-			buf = audio.LittleEndianPCM(buf[:0], block)
-			if _, err := in.Write(buf); err != nil {
-				return
-			}
-		}
-	}()
-	return nil
 }
 
 func mhz(v uint32) string { return fmt.Sprintf("%.1f MHz", float64(v)/1e6) }

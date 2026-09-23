@@ -36,7 +36,7 @@ cd "$root"
 bin="$root/bin"
 logs="$root/logs"
 
-TOOLS=(hub adsb tpms scanner fm uat)
+TOOLS=(hub adsb tpms scanner fm uat airband)
 PORT=9999          # every receiver's web UI; only one runs at a time
 
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -182,6 +182,14 @@ build() {
       built=1
     fi
   done
+  # The combined binary is not in TOOLS — it is not a receiver and must
+  # not be matched when looking for one holding the radio — but it is
+  # built from the same sources and goes stale just as easily.
+  if [ "${1:-}" = "--force" ] || needs_build sdr; then
+    dim "building sdr…"
+    "$go" build -o "$bin/sdr" ./cmd/sdr || die "build failed: sdr"
+    built=1
+  fi
   [ "$built" = 1 ] && grn "built" || true
 }
 

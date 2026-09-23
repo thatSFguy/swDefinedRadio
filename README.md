@@ -25,6 +25,7 @@ third-party module — so `go build` works with nothing but the toolchain.
 | 🛩️ **UAT** | 978 MHz | The other half of ADS-B in the US, plus ground stations |
 | 🚗 **Tires** | 315 / 433 MHz | Tire-pressure sensors, clustered into vehicles as they pass |
 | 📡 **Spectrum** | 24 – 1766 MHz | Sweep, waterfall, and what each signal probably is |
+| 🗼 **Airband** | 118 – 137 MHz | Aircraft voice: scans channels, stops on whoever is talking |
 | 📻 **FM** | 87.5 – 108 MHz | Broadcast radio, streamed to the browser |
 
 ## Try it
@@ -64,6 +65,7 @@ that receiver, which is simpler when it is all you want.
 ```sh
 ./sdr                             # every receiver, with tabs
 ./sdr adsb -lat 51.48 -lon -0.001 # just the aircraft receiver
+./sdr airband                     # scan aircraft voice channels
 ./sdr fm 98.7                     # listen to a station
 ./sdr start hub                   # background, logging to logs/
 ./sdr status                      # what is running, and is the radio usable

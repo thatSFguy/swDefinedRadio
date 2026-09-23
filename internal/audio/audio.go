@@ -3,9 +3,16 @@
 package audio
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
+	"os/exec"
+	"strconv"
 	"sync"
 )
+
+// AudioRate is the rate every receiver here produces sound at.
+const AudioRate = 48_000
 
 // subscriberBacklog is how many blocks a listener may fall behind before
 // blocks start being dropped for it. At 48 kHz a block is a few tens of
@@ -132,4 +139,38 @@ func LittleEndianPCM(buf []byte, block []int16) []byte {
 		buf = append(buf, byte(s), byte(s>>8))
 	}
 	return buf
+}
+
+// Speaker plays a broadcast through this machine's own audio device.
+//
+// It pipes to sox, which is the one tool present on both a normal
+// desktop and WSL. Failure is not fatal and should not be treated as
+// such by callers: the browser stream is the primary output, and a
+// machine with no sound card is a perfectly good receiver.
+func Speaker(ctx context.Context, b *Broadcaster) error {
+	cmd := exec.CommandContext(ctx, "play", "-q",
+		"-t", "raw", "-r", strconv.Itoa(AudioRate),
+		"-e", "signed", "-b", "16", "-c", "1", "-")
+	cmd.Env = speakerEnv()
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start sox (is it installed?): %w", err)
+	}
+
+	ch := b.Subscribe()
+	go func() {
+		defer in.Close()
+		defer b.Unsubscribe(ch)
+		buf := make([]byte, 0, 8192)
+		for block := range ch {
+			buf = LittleEndianPCM(buf[:0], block)
+			if _, err := in.Write(buf); err != nil {
+				return
+			}
+		}
+	}()
+	return nil
 }

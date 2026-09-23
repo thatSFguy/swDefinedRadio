@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/adsb"
+	"github.com/thatSFguy/swDefinedRadio/internal/apps/airband"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/fm"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/scanner"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/tpms"
@@ -101,6 +102,24 @@ func (t scannerTab) Run(ctx context.Context, h radio.Handle) error {
 	return t.app.Run(ctx, h.Stream)
 }
 
+// --- aircraft voice ------------------------------------------------------
+
+type airbandTab struct{ app *airband.App }
+
+func (t airbandTab) Meta() Meta { return Meta{"airband", "Airband", "118–137 MHz"} }
+
+func (t airbandTab) Need() radio.Need {
+	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
+}
+
+func (t airbandTab) Handler(ctx context.Context) (http.Handler, error) {
+	return t.app.Handler(ctx)
+}
+
+func (t airbandTab) Run(ctx context.Context, h radio.Handle) error {
+	return t.app.Run(ctx, h.Stream)
+}
+
 // --- broadcast FM --------------------------------------------------------
 
 type fmTab struct{ app *fm.App }
@@ -125,6 +144,7 @@ var (
 	_ App = (*tpmsTab)(nil)
 	_ App = scannerTab{}
 	_ App = fmTab{}
+	_ App = airbandTab{}
 
 	_ Background = adsbTab{}
 	_ Background = uatTab{}
@@ -133,8 +153,9 @@ var (
 
 // Receivers wraps built receivers as tabs, in the order they appear.
 func Receivers(a *adsb.App, u *uat.App, t *tpms.App, tpmsMode radio.Mode,
-	s *scanner.App, f *fm.App) []App {
+	s *scanner.App, f *fm.App, ab *airband.App) []App {
 	return []App{
-		adsbTab{a}, uatTab{u}, &tpmsTab{t, tpmsMode}, scannerTab{s}, fmTab{f},
+		adsbTab{a}, uatTab{u}, airbandTab{ab},
+		&tpmsTab{t, tpmsMode}, scannerTab{s}, fmTab{f},
 	}
 }
