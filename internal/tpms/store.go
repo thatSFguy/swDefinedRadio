@@ -48,6 +48,11 @@ type Sensor struct {
 
 	// Vehicle is filled in by clustering, not stored.
 	Vehicle string `json:"vehicle,omitempty"`
+
+	// Pinned is the vehicle this sensor was assigned to by hand, if any.
+	// It is separate from Vehicle so a page can tell an assignment that
+	// was made from one that was merely worked out.
+	Pinned string `json:"pinned,omitempty"`
 }
 
 // PSI converts the last pressure for display.
@@ -70,6 +75,7 @@ type state struct {
 	Sensors map[string]*Sensor        `json:"sensors"`
 	Cooccur map[string]map[string]int `json:"cooccur"`
 	Labels  map[string]string         `json:"labels"`
+	Pinned  map[string]string         `json:"pinned,omitempty"`
 }
 
 // Store holds every sensor heard, the co-occurrence counts that drive
@@ -78,6 +84,13 @@ type Store struct {
 	mu      sync.RWMutex
 	sensors map[string]*Sensor
 	cooccur map[string]map[string]int
+
+	// pinned overrides the clustering: a sensor named here belongs to
+	// the vehicle it names, whatever the co-occurrence counts suggest.
+	// Hearing two cars together often enough will merge them, and no
+	// amount of further listening un-merges them, so there has to be a
+	// way to say otherwise.
+	pinned map[string]string
 	labels  map[string]string
 
 	recent  []Reading // ring of the newest readings, for the live feed
@@ -135,6 +148,9 @@ func (s *Store) load() error {
 	if st.Labels != nil {
 		s.labels = st.Labels
 	}
+	if st.Pinned != nil {
+		s.pinned = st.Pinned
+	}
 	return nil
 }
 
@@ -142,7 +158,7 @@ func (s *Store) load() error {
 // leave a truncated state file behind.
 func (s *Store) Save() error {
 	s.mu.Lock()
-	st := state{Sensors: s.sensors, Cooccur: s.cooccur, Labels: s.labels}
+	st := state{Sensors: s.sensors, Cooccur: s.cooccur, Labels: s.labels, Pinned: s.pinned}
 	b, err := json.MarshalIndent(st, "", "  ")
 	s.dirty = false
 	s.mu.Unlock()
@@ -243,6 +259,38 @@ func (s *Store) SetLabel(kind, id, label string) {
 	s.dirty = true
 }
 
+// Alone is the vehicle a sensor is assigned to when it belongs to none:
+// it becomes a group of its own, which is how a sensor is pulled out of a
+// cluster it was wrongly put in.
+const Alone = "alone"
+
+// SetVehicle assigns a sensor to a vehicle by hand.
+//
+// An empty vehicle returns the sensor to the clustering's judgement.
+// Alone puts it in a group of its own. Anything else is taken as a
+// vehicle id, which may be one that does not exist yet — naming a new
+// vehicle and moving the first sensor into it are the same act.
+func (s *Store) SetVehicle(sensorKey, vehicle string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pinned == nil {
+		s.pinned = map[string]string{}
+	}
+	if vehicle == "" {
+		delete(s.pinned, sensorKey)
+	} else {
+		s.pinned[sensorKey] = vehicle
+	}
+	s.dirty = true
+}
+
+// Pinned reports the hand-assigned vehicle for a sensor, if any.
+func (s *Store) Pinned(sensorKey string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pinned[sensorKey]
+}
+
 // Dirty reports whether there are unsaved changes.
 func (s *Store) Dirty() bool {
 	s.mu.RLock()
@@ -268,6 +316,7 @@ func (s *Store) Snapshot() ([]Sensor, []Vehicle, int64) {
 	for k, sen := range s.sensors {
 		c := *sen
 		c.Vehicle = owner[k]
+		c.Pinned = s.pinned[k]
 		c.Label = s.labels["sensor:"+k]
 		out = append(out, c)
 	}
@@ -291,6 +340,17 @@ func (s *Store) Recent(n int) []Reading {
 // cluster groups sensors into vehicles by union-find over the pairs whose
 // co-occurrence is both frequent enough and consistent enough. Callers
 // must hold at least a read lock.
+// assigned reports whether this group exists because someone said so,
+// rather than because sensors were heard together.
+func (s *Store) assigned(root string, members []string) bool {
+	for _, k := range members {
+		if v := s.pinned[k]; v == root || (v == Alone && k == root) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) cluster() []Vehicle {
 	parent := make(map[string]string, len(s.sensors))
 	var find func(string) string
@@ -320,12 +380,16 @@ func (s *Store) cluster() []Vehicle {
 	}
 	for a, peers := range s.cooccur {
 		sa := s.sensors[a]
-		if sa == nil {
+		// A sensor assigned by hand takes no part in the automatic
+		// unioning. Union-find can only merge, never split, so a pinned
+		// sensor has to be kept out of the merging altogether — adding
+		// its own union afterwards would not undo one it was caught in.
+		if sa == nil || s.pinned[a] != "" {
 			continue
 		}
 		for b, shared := range peers {
 			sb := s.sensors[b]
-			if sb == nil || shared < MinShared {
+			if sb == nil || shared < MinShared || s.pinned[b] != "" {
 				continue
 			}
 			rarer := min(sa.Count, sb.Count)
@@ -337,15 +401,25 @@ func (s *Store) cluster() []Vehicle {
 
 	groups := make(map[string][]string)
 	for k := range s.sensors {
-		r := find(k)
-		groups[r] = append(groups[r], k)
+		if v := s.pinned[k]; v != "" {
+			// Alone means a group of this sensor's own, which is what
+			// pulling one out of a cluster leaves it as.
+			if v == Alone {
+				v = k
+			}
+			groups[v] = append(groups[v], k)
+			continue
+		}
+		groups[find(k)] = append(groups[find(k)], k)
 	}
 
 	out := make([]Vehicle, 0, len(groups))
 	for root, members := range groups {
 		// A lone sensor is not yet a vehicle; it may be a passing car
 		// heard once, or a wheel whose siblings have not been heard.
-		if len(members) < 2 {
+		// Unless someone said otherwise: a group somebody assembled by
+		// hand is a vehicle from its first sensor onwards.
+		if len(members) < 2 && !s.assigned(root, members) {
 			continue
 		}
 		sort.Strings(members)

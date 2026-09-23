@@ -58,14 +58,14 @@ func (t uatTab) Run(ctx context.Context, h radio.Handle) error {
 
 func (t uatTab) Background(ctx context.Context) { t.app.Expire(ctx) }
 
-// --- tyre sensors --------------------------------------------------------
+// --- tire sensors --------------------------------------------------------
 
 type tpmsTab struct {
 	app  *tpms.App
 	mode radio.Mode
 }
 
-func (t *tpmsTab) Meta() Meta { return Meta{"tpms", "Tyres", "315 / 433 MHz"} }
+func (t *tpmsTab) Meta() Meta { return Meta{"tpms", "Tires", "315 / 433 MHz"} }
 
 // Need asks for an address rather than samples: rtl_433 knows the sensor
 // protocols and opens its own connection to the radio, so what this

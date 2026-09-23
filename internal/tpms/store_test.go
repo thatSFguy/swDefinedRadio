@@ -198,3 +198,133 @@ func TestReadingLogIsAppended(t *testing.T) {
 		t.Errorf("logged %d readings, want 2", len(b))
 	}
 }
+
+// vehicleOf finds which vehicle a sensor ended up in, or "" for none.
+func vehicleOf(t *testing.T, s *Store, key string) string {
+	t.Helper()
+	sensors, _, _ := s.Snapshot()
+	for _, sen := range sensors {
+		if sen.Key == key {
+			return sen.Vehicle
+		}
+	}
+	t.Fatalf("no sensor %q", key)
+	return ""
+}
+
+// Two cars that keep passing together get merged, and no amount of
+// further listening separates them — co-occurrence only ever accumulates.
+// So there has to be a way to say they are not the same car.
+func TestSensorCanBeTakenOutOfTheWrongVehicle(t *testing.T) {
+	s := newTestStore(t)
+
+	// A car and a motorbike that always travel together, often enough to
+	// be indistinguishable from one vehicle.
+	at := time.Now().Add(-time.Hour)
+	for i := range 6 {
+		arrive(s, at.Add(time.Duration(i)*10*time.Minute), "Toyota", "aa01", "aa02", "bb01")
+	}
+
+	_, vehicles, _ := s.Snapshot()
+	if len(vehicles) != 1 {
+		t.Fatalf("expected the three to be merged, got %d vehicles", len(vehicles))
+	}
+	merged := vehicles[0].ID
+
+	// Pull the odd one out.
+	s.SetVehicle("Toyota/bb01", Alone)
+
+	sensors, vehicles, _ := s.Snapshot()
+	if got := vehicleOf(t, s, "Toyota/bb01"); got == merged {
+		t.Errorf("bb01 is still in %s after being taken out of it", got)
+	}
+	// and the other two are left where they were
+	if a, b := vehicleOf(t, s, "Toyota/aa01"), vehicleOf(t, s, "Toyota/aa02"); a != b || a == "" {
+		t.Errorf("the remaining pair came apart: %q and %q", a, b)
+	}
+	_ = sensors
+	_ = vehicles
+}
+
+// Moving a sensor into a named vehicle is how a cluster that split, or
+// never formed, gets put right.
+func TestSensorCanBeAssignedToAVehicle(t *testing.T) {
+	s := newTestStore(t)
+	at := time.Now().Add(-time.Hour)
+	for i := range 5 {
+		arrive(s, at.Add(time.Duration(i)*10*time.Minute), "Toyota", "aa01", "aa02")
+	}
+	// A wheel heard on its own, never at the same time as the others.
+	arrive(s, at.Add(9*time.Hour), "Toyota", "cc01")
+
+	_, vehicles, _ := s.Snapshot()
+	if len(vehicles) != 1 {
+		t.Fatalf("expected one vehicle, got %d", len(vehicles))
+	}
+	target := vehicles[0].ID
+
+	if got := vehicleOf(t, s, "Toyota/cc01"); got != "" {
+		t.Fatalf("cc01 started in %q, expected it to be unassigned", got)
+	}
+	s.SetVehicle("Toyota/cc01", target)
+
+	if got := vehicleOf(t, s, "Toyota/cc01"); got != target {
+		t.Errorf("cc01 is in %q, want %q", got, target)
+	}
+	_, vehicles, _ = s.Snapshot()
+	for _, v := range vehicles {
+		if v.ID == target && len(v.Sensors) != 3 {
+			t.Errorf("%s has %d sensors, want 3", target, len(v.Sensors))
+		}
+	}
+}
+
+// Clearing an assignment hands the sensor back to the clustering.
+func TestClearingAnAssignmentRestoresClustering(t *testing.T) {
+	s := newTestStore(t)
+	at := time.Now().Add(-time.Hour)
+	for i := range 6 {
+		arrive(s, at.Add(time.Duration(i)*10*time.Minute), "Toyota", "aa01", "aa02")
+	}
+	was := vehicleOf(t, s, "Toyota/aa02")
+
+	s.SetVehicle("Toyota/aa02", Alone)
+	if vehicleOf(t, s, "Toyota/aa02") == was {
+		t.Fatal("the sensor was not taken out")
+	}
+
+	s.SetVehicle("Toyota/aa02", "")
+	if got := vehicleOf(t, s, "Toyota/aa02"); got != was {
+		t.Errorf("after clearing, the sensor is in %q, want %q", got, was)
+	}
+}
+
+// An assignment has to outlive a restart, or it is not worth making.
+func TestAssignmentsSurviveAReload(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	at := time.Now().Add(-time.Hour)
+	for i := range 6 {
+		arrive(s, at.Add(time.Duration(i)*10*time.Minute), "Toyota", "aa01", "aa02", "bb01")
+	}
+	s.SetVehicle("Toyota/bb01", Alone)
+	apart := vehicleOf(t, s, "Toyota/bb01")
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	again, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer again.Close()
+	if got := vehicleOf(t, again, "Toyota/bb01"); got != apart {
+		t.Errorf("after reloading, bb01 is in %q, want %q", got, apart)
+	}
+	if got := again.Pinned("Toyota/bb01"); got != Alone {
+		t.Errorf("the assignment did not survive: %q", got)
+	}
+}

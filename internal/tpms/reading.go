@@ -1,4 +1,4 @@
-// Package tpms logs tyre-pressure sensor transmissions and groups the
+// Package tpms logs tire-pressure sensor transmissions and groups the
 // sensors into vehicles.
 //
 // Demodulation is left to rtl_433, which carries decoders for around

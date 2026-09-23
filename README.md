@@ -4,7 +4,7 @@
 
 **Five radio receivers, one dongle, one binary.**
 
-Aircraft · tyre sensors · spectrum · broadcast FM — in a browser, with tabs.
+Aircraft · tire sensors · spectrum · broadcast FM — in a browser, with tabs.
 
 [![ci](https://github.com/thatSFguy/swDefinedRadio/actions/workflows/ci.yml/badge.svg)](https://github.com/thatSFguy/swDefinedRadio/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/thatSFguy/swDefinedRadio?color=blue)](https://github.com/thatSFguy/swDefinedRadio/releases)
@@ -23,7 +23,7 @@ third-party module — so `go build` works with nothing but the toolchain.
 |---|---|---|
 | ✈️ **Aircraft** | 1090 MHz | ADS-B: live map, range, alerts for what's worth looking up for |
 | 🛩️ **UAT** | 978 MHz | The other half of ADS-B in the US, plus ground stations |
-| 🚗 **Tyres** | 315 / 433 MHz | Tyre-pressure sensors, clustered into vehicles as they pass |
+| 🚗 **Tires** | 315 / 433 MHz | Tire-pressure sensors, clustered into vehicles as they pass |
 | 📡 **Spectrum** | 24 – 1766 MHz | Sweep, waterfall, and what each signal probably is |
 | 📻 **FM** | 87.5 – 108 MHz | Broadcast radio, streamed to the browser |
 
@@ -130,7 +130,7 @@ requirement.
 
 * **Go 1.25+** and nothing else from Go's side
 * **`rtl-sdr`** — `sudo apt install rtl-sdr`
-* **`rtl_433`** — only for the tyre sensors
+* **`rtl_433`** — only for the tire sensors
 * **`sox`** — only for FM through this machine's speakers
 * An RTL-SDR dongle you can open ([permissions](#permissions))
 

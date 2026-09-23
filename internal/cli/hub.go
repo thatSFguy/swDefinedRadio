@@ -29,7 +29,7 @@ import (
 // It is the whole radio in one place: pick a tab and that receiver gets
 // the dongle. Because the process outlives any one receiver, what they
 // have heard survives being switched away from — the aircraft table is
-// still there when you come back to it, and the tyre sensors go on
+// still there when you come back to it, and the tire sensors go on
 // accumulating whether or not anyone is looking.
 //
 // The receivers themselves are unchanged, and each still runs as its own
@@ -56,10 +56,10 @@ func Hub(args []string) {
 		lon = fs.Float64("lon", saved.Lon, "receiver longitude")
 		ttl = fs.Duration("ttl", 60*time.Second, "forget aircraft unheard for this long")
 
-		tpmsFreqs = fs.String("tpms-freq", "315M,433.92M", "frequencies for the tyre sensor receiver")
-		tpmsHop   = fs.Int("tpms-hop", 30, "seconds to dwell on each tyre sensor frequency")
-		tpmsDir   = fs.String("tpms-data", "data/tpms", "directory for the tyre sensor log and table")
-		tpmsMode  = fs.String("tpms-mode", "tcp", "how the tyre sensor receiver reaches the radio: tcp (share it) or exclusive (take it)")
+		tpmsFreqs = fs.String("tpms-freq", "315M,433.92M", "frequencies for the tire sensor receiver")
+		tpmsHop   = fs.Int("tpms-hop", 30, "seconds to dwell on each tire sensor frequency")
+		tpmsDir   = fs.String("tpms-data", "data/tpms", "directory for the tire sensor log and table")
+		tpmsMode  = fs.String("tpms-mode", "tcp", "how the tire sensor receiver reaches the radio: tcp (share it) or exclusive (take it)")
 
 		fmFreq   = fs.String("fm-freq", "98.7M", "station the FM receiver starts on")
 		scanFrom = fs.String("scan-start", "88M", "start of the spectrum sweep")

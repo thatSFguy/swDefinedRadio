@@ -3,7 +3,7 @@
 # sdr — build and run the receivers in this repo.
 #
 #   ./sdr                   every receiver, with tabs   (foreground)
-#   ./sdr tpms              tyre-pressure logger        (foreground)
+#   ./sdr tpms              tire-pressure logger        (foreground)
 #   ./sdr adsb              ADS-B aircraft receiver     (foreground)
 #   ./sdr uat               978 MHz UAT receiver, US    (foreground)
 #   ./sdr scanner           spectrum sweeper            (foreground)
@@ -406,7 +406,7 @@ choose() {
       hub)     printf '  0) hub      every receiver, with tabs   [%s]\n' "$state" ;;
       adsb)    printf '  1) adsb     aircraft, 1090 MHz          [%s]\n' "$state" ;;
       uat)     printf '  5) uat      aircraft, 978 MHz (US)      [%s]\n' "$state" ;;
-      tpms)    printf '  2) tpms     tyre sensors, 315/433 MHz   [%s]\n' "$state" ;;
+      tpms)    printf '  2) tpms     tire sensors, 315/433 MHz   [%s]\n' "$state" ;;
       scanner) printf '  3) scanner  sweep the spectrum          [%s]\n' "$state" ;;
       fm)      printf '  4) fm       listen to broadcast FM      [%s]\n' "$state" ;;
     esac

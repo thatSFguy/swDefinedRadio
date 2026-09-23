@@ -1,4 +1,4 @@
-// Command tpms logs tyre-pressure sensor transmissions and serves a live
+// Command tpms logs tire-pressure sensor transmissions and serves a live
 // view of them.
 //
 // It is one subcommand of the combined sdr binary, built on its own for

@@ -23,7 +23,7 @@ cannot be automated — it needs administrator rights and a choice only a
 person should make. `sdr install` checks which driver is bound and tells
 you.
 
-**On Linux and macOS**, install `rtl-sdr` (and `rtl-433` for the tyre
+**On Linux and macOS**, install `rtl-sdr` (and `rtl-433` for the tire
 sensors) from your package manager, then put the binary on your PATH.
 
 Verify a download against `SHA256SUMS`.

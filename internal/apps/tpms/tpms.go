@@ -1,4 +1,4 @@
-// Package tpms logs tyre-pressure sensor transmissions heard on 315 and
+// Package tpms logs tire-pressure sensor transmissions heard on 315 and
 // 433.92 MHz, groups the sensors into vehicles, and serves a live view.
 //
 // Unlike the other receivers this one does no signal processing of its
@@ -236,6 +236,30 @@ func Routes(mux *http.ServeMux, store *lib.Store) {
 		store.SetLabel(req.Kind, req.ID, req.Label)
 		if err := store.Save(); err != nil {
 			log.Printf("save after label: %v", err)
+		}
+		web.WriteJSON(w, map[string]string{"status": "ok"})
+	})
+
+	// Which vehicle a sensor belongs to is worked out from what is heard
+	// together, and sometimes that is wrong: two cars that always travel
+	// together look like one, and a wheel heard on its own looks like
+	// nothing. This is how someone says otherwise.
+	mux.HandleFunc("POST /api/assign", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Sensor  string `json:"sensor"`
+			Vehicle string `json:"vehicle"` // "" returns it to the clustering
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if req.Sensor == "" {
+			http.Error(w, "sensor required", http.StatusBadRequest)
+			return
+		}
+		store.SetVehicle(req.Sensor, req.Vehicle)
+		if err := store.Save(); err != nil {
+			log.Printf("save after assign: %v", err)
 		}
 		web.WriteJSON(w, map[string]string{"status": "ok"})
 	})

@@ -49,6 +49,12 @@
   .lbl:hover { border-color:var(--line); }
   .lbl:focus { border-color:var(--accent); border-style:solid; outline:none; background:var(--bg); }
   .lbl::placeholder { color:#4d5866; font-style:italic; }
+  .asg { background:var(--panel); border:1px solid transparent; color:inherit;
+         font:inherit; font-size:11px; padding:1px 3px; border-radius:4px;
+         max-width:150px; }
+  .asg:hover { border-color:var(--line); }
+  .asg:focus { border-color:var(--accent); outline:none; }
+  .asg.none { color:var(--dim); font-style:italic; }
   #feed div { padding:2px 0; border-bottom:1px solid #21262d; color:var(--dim); font-size:12px;
               font-family:ui-monospace,SFMono-Regular,monospace; }
   #feed b { color:var(--fg); font-weight:500; }
@@ -165,6 +171,41 @@ function renderVehicles(vehicles, sensors, now) {
   }));
 }
 
+// Which vehicle a sensor belongs to is a guess from what was heard
+// together, and it can be wrong in both directions: two cars that always
+// travel together merge into one, and a wheel heard alone joins nothing.
+// So the column is a choice, not a readout.
+async function assign(sensorKey, vehicle) {
+  await fetch('/api/assign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sensor: sensorKey, vehicle }),
+  });
+  refresh();
+}
+
+function vehiclePicker(s, vehicles, vname) {
+  const sel = document.createElement('select');
+  sel.className = 'asg' + (s.vehicle ? '' : ' none');
+  sel.title = 'which vehicle this sensor is on';
+
+  const opt = (value, text, selected) => {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = text; o.selected = selected;
+    sel.appendChild(o);
+  };
+
+  const pinned = s.pinned || '';
+  opt('', pinned ? 'automatic' : (s.vehicle ? 'automatic' : 'unassigned'), pinned === '');
+  for (const v of vehicles) {
+    opt(v.id, vname.get(v.id) || v.id, pinned === v.id);
+  }
+  opt('alone', 'on its own', pinned === 'alone');
+
+  sel.onchange = () => assign(s.key, sel.value);
+  return sel;
+}
+
 function renderSensors(sensors, vehicles, now) {
   $('s-empty').style.display = sensors.length ? 'none' : '';
   const vname = new Map(vehicles.map(v => [v.id, v.label || v.id.split('/')[1] || v.id]));
@@ -176,17 +217,20 @@ function renderSensors(sensors, vehicles, now) {
     const tdLabel = document.createElement('td');
     tdLabel.appendChild(labelInput('sensor', s.key, s.label, 'name…'));
 
+    const tdVehicle = document.createElement('td');
+    tdVehicle.appendChild(vehiclePicker(s, vehicles, vname));
+
     const rest = document.createElement('template');
     rest.innerHTML = `
       <td class="mono">${s.model} ${s.id}</td>
-      <td>${s.vehicle ? (vname.get(s.vehicle) || '') : '<span class="tag">unassigned</span>'}</td>
       <td class="${psiClass(psi)}">${psi != null ? psi.toFixed(1) : '—'}</td>
       <td>${s.has_temperature ? s.temperature_c.toFixed(0) : '—'}</td>
       <td>${s.battery_ok === false ? '<span class="lo">low</span>' : s.battery_ok === true ? 'ok' : '—'}</td>
       <td><span class="tag ${(s.integrity||'').toLowerCase() === 'crc' ? 'crc' : ''}">${s.integrity || '—'}</span></td>
       <td>${s.count}</td>
       <td>${ago(s.last_seen, now)}</td>`;
-    tr.append(tdLabel, ...rest.content.children);
+    const cells = [...rest.content.children];
+    tr.append(tdLabel, cells[0], tdVehicle, ...cells.slice(1));
     return tr;
   }));
 }

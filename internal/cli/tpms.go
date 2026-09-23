@@ -14,7 +14,7 @@ import (
 	"github.com/thatSFguy/swDefinedRadio/internal/web"
 )
 
-// Tpms logs tyre-pressure sensor transmissions heard on 315 and
+// Tpms logs tire-pressure sensor transmissions heard on 315 and
 // 433.92 MHz, groups the sensors into vehicles, and serves a live view.
 func Tpms(args []string) {
 	fs := flag.NewFlagSet("tpms", flag.ExitOnError)

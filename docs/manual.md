@@ -19,7 +19,7 @@ linkage, so `go build` works with nothing but the Go toolchain.
 cmd/
   hub/          Every receiver at once, with a tab bar to choose between
   adsb/         ADS-B receiver: live aircraft map and JSON API
-  tpms/         Tyre-pressure sensor logger with vehicle clustering
+  tpms/         Tire-pressure sensor logger with vehicle clustering
   uat/          978 MHz UAT receiver (US): the same map, other band
   scanner/      Spectrum sweeper: live plot, waterfall, signal list
   fm/           Broadcast FM receiver: browser player and speaker output
@@ -60,7 +60,7 @@ process serve all of them while each still runs on its own.
 
 ```sh
 ./sdr                             # every receiver, with tabs — the usual way
-./sdr tpms                        # just the tyre-pressure logger, foreground
+./sdr tpms                        # just the tire-pressure logger, foreground
 ./sdr adsb -lat 43.2 -lon -85.6   # just the aircraft receiver, foreground
 ./sdr fm 98.7                     # listen to a broadcast FM station
 ./sdr uat                         # 978 MHz UAT, United States only
@@ -205,7 +205,7 @@ with no UI. Override with `-http` if 9999 is taken:
   third-party dependencies and no cgo
 * `rtl-sdr` (`sudo apt install rtl-sdr`), which provides `rtl_tcp` and
   `rtl_sdr`
-* `rtl_433` (`sudo apt install rtl-433`), for the tyre sensors only
+* `rtl_433` (`sudo apt install rtl-433`), for the tire sensors only
 * `sox` (`sudo apt install sox`), only if you want FM through this
   machine's speakers rather than the browser
 * An RTL-SDR dongle the current user can open — see Permissions below
@@ -542,7 +542,7 @@ UATOUT=/tmp/sample.iq go test ./internal/uat -run TestWriteSampleCapture
 
 ## tpms
 
-Logs tyre-pressure sensor transmissions, groups the sensors into
+Logs tire-pressure sensor transmissions, groups the sensors into
 vehicles, and lets you name them.
 
 ```sh
@@ -579,6 +579,30 @@ The thresholds are deliberately conservative: a single coincidental
 overlap never merges two cars. Two vehicles that genuinely always travel
 together are the one case clustering cannot separate — split them by
 hand if it happens.
+
+### When the guess is wrong
+
+Co-occurrence is a guess, and it fails in both directions. Two vehicles
+that always travel together — parked side by side, leaving together every
+morning — are heard together often enough to be indistinguishable from
+one, and they merge. A wheel whose siblings are never heard at the same
+moment joins nothing and sits unassigned.
+
+Neither corrects itself with more listening: co-occurrence counts only
+ever accumulate, so a merge is permanent. The **vehicle** column in the
+sensor table is therefore a choice, not a readout:
+
+* **automatic** — leave it to the clustering, which is the default.
+* **a named vehicle** — put this sensor on that vehicle, whatever the
+  counts say.
+* **on its own** — take it out of the group it was put in. It becomes a
+  vehicle of its own, which other sensors can then be moved onto.
+
+A sensor assigned by hand stops taking part in the automatic clustering
+altogether, since union-find can merge but never split; it could not be
+pulled back out otherwise. Assignments are saved with the sensor table
+and survive a restart. Setting a sensor back to **automatic** returns it
+to the clustering's judgement.
 
 ### Flags
 

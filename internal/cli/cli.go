@@ -30,7 +30,7 @@ var Commands = []struct {
 	{"hub", "every receiver, with tabs", Hub},
 	{"adsb", "aircraft, 1090 MHz", Adsb},
 	{"uat", "aircraft, 978 MHz (US)", Uat},
-	{"tpms", "tyre sensors, 315/433 MHz", Tpms},
+	{"tpms", "tire sensors, 315/433 MHz", Tpms},
 	{"scanner", "sweep the spectrum", Scanner},
 	{"fm", "listen to broadcast FM", Fm},
 }

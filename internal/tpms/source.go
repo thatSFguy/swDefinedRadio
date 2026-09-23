@@ -78,7 +78,7 @@ func Start(ctx context.Context, cfg SourceConfig) (*Source, error) {
 	return &Source{cmd: cmd, out: out}, nil
 }
 
-// Run reads until rtl_433 exits, calling onTPMS for every tyre sensor
+// Run reads until rtl_433 exits, calling onTPMS for every tire sensor
 // report and onOther for anything else it decodes.
 func (s *Source) Run(onTPMS func(Reading), onOther func([]byte)) error {
 	sc := bufio.NewScanner(s.out)
