@@ -198,6 +198,7 @@ type State struct {
 	Scanning bool      `json:"scanning"`
 	Busy     bool      `json:"busy"`
 	Level   float64 `json:"level"`
+	Peak    float64 `json:"peak"` // the strongest over the last second or so
 	Squelch float64 `json:"squelch"` // the one in force, whichever it is
 
 	// OnChannel says the frequency is one of the saved channels, and
@@ -226,7 +227,7 @@ func (a *App) State() State {
 	st := State{
 		Freq: a.freq, Name: a.nameOfLocked(a.freq),
 		Scanning: a.scanning, Busy: a.busy,
-		Level: a.am.Level(), Squelch: a.am.Squelch,
+		Level: a.am.Level(), Peak: a.am.Peak(), Squelch: a.am.Squelch,
 		Channels: slices.Clone(a.channels),
 		// An empty list, not null, so a page can count it without
 		// checking first.

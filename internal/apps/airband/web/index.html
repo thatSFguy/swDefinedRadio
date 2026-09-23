@@ -28,11 +28,24 @@
   .unit { color:var(--dim); font-size:14px; }
   .who { text-align:center; color:var(--accent); font-size:13px; min-height:20px; margin-top:2px; }
 
-  .meter { height:6px; background:#0b0f14; border-radius:3px; overflow:hidden; margin:14px 0 3px;
-           position:relative; }
-  .meter i { display:block; height:100%; width:0; background:linear-gradient(90deg,#1f6feb,#3fb950);
-             transition:width .12s; }
-  .meter u { position:absolute; top:-3px; width:2px; height:12px; background:var(--warn); }
+  /* The meter is the squelch control: you set the threshold by putting
+     it just above where the static reaches, which means seeing both at
+     once on the same scale. */
+  .meter { height:18px; background:#0b0f14; border-radius:4px; margin:16px 0 3px;
+           position:relative; cursor:ew-resize; touch-action:none; }
+  .meter i { position:absolute; left:0; top:0; bottom:0; width:0; border-radius:4px 0 0 4px;
+             background:linear-gradient(90deg,#1f6feb,#3fb950); transition:width .1s; }
+  /* How far the static has reached lately, which is the thing you are
+     setting the threshold above. */
+  .meter s { position:absolute; top:0; bottom:0; width:2px; background:var(--dim); opacity:.9; }
+  .meter u {
+    position:absolute; top:-4px; bottom:-4px; width:4px; border-radius:2px;
+    background:var(--warn); box-shadow:0 0 0 1px #0d1117;
+  }
+  .meter u::after {
+    content:""; position:absolute; left:-7px; right:-7px; top:0; bottom:0; cursor:ew-resize;
+  }
+  .meter.open i { background:linear-gradient(90deg,#1f6feb,#3fb950,#3fb950); }
   .meterlbl { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
   .live { color:var(--ok); font-weight:600; }
   .idle { color:var(--dim); }
@@ -110,18 +123,20 @@
   <div class="dial"><span class="freq" id="freq">—</span><span class="unit">MHz</span></div>
   <div class="who" id="who"></div>
 
-  <div class="meter"><i id="sig"></i><u id="sqmark" hidden></u></div>
-  <div class="meterlbl"><span id="status" class="idle">idle</span><span id="lvl">0.00</span></div>
+  <div class="meter" id="meter" title="drag to set the squelch just above where the static reaches">
+    <i id="sig"></i><s id="pk"></s><u id="sqmark" hidden></u>
+  </div>
+  <div class="meterlbl">
+    <span id="status" class="idle">idle</span>
+    <span><span id="sqwhat">squelch</span> <b id="sqv">0.000</b> · peak <span id="lvl">0.000</span></span>
+  </div>
 
   <div class="row">
     <button class="go" id="listen" title="turn the audio on or off">Audio on</button>
     <button id="scan">Scan</button>
   </div>
   <div class="row">
-    <span class="sq" id="sqwhat">squelch</span>
-    <input type="range" id="squelch" min="0" max="0.15" step="0.002">
-    <span class="sq" id="sqv">0.000</span>
-    <button id="sqauto" hidden title="forget this channel's own squelch and use the receiver's">Auto</button>
+    <button id="sqauto" hidden title="forget this channel's own squelch and use the receiver's">Auto squelch</button>
   </div>
   <audio id="audio" hidden></audio>
 </div>
@@ -201,19 +216,56 @@ $('scan').onclick = async () => {
   if (d) { state = d; draw(); }
 };
 
-$('squelch').oninput = () => { $('sqv').textContent = (+$('squelch').value).toFixed(3); };
+// METER_SCALE is fixed. Deriving it from the squelch, as this used to,
+// meant the scale moved whenever the threshold did — so the marker never
+// appeared to move, everything else did, and the two could not be
+// compared by eye at all.
+const METER_SCALE = 0.15;
+const pct = v => Math.max(0, Math.min(100, (v / METER_SCALE) * 100));
+
+let dragging = false, pending = null;
+
+function squelchAt(clientX) {
+  const r = $('meter').getBoundingClientRect();
+  const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  // Rounded to the step the numbers are shown at, so what is displayed
+  // is what was set.
+  return Math.round(f * METER_SCALE * 500) / 500;
+}
 
 // Adjusting the squelch while listening to a channel is about that
 // channel: the noise floor differs across this band by a factor of two,
 // so a setting made while sitting on one frequency is rarely the right
 // one for all of them. Off a saved channel there is nothing to attach it
 // to, so it changes the receiver's own.
-$('squelch').onchange = async () => {
-  const v = +$('squelch').value;
+async function commitSquelch(v) {
   const d = state && state.on_channel
     ? await post('/api/channel/squelch', { freq_hz: state.freq_hz, squelch: v })
     : await post('/api/squelch', { squelch: v });
+  pending = null;
   if (d) { state = d; draw(); }
+}
+
+// Drawn straight away rather than waiting for the answer, so the marker
+// follows the pointer instead of lagging a poll behind it.
+function previewSquelch(v) {
+  pending = v;
+  $('sqv').textContent = v.toFixed(3);
+  $('sqmark').hidden = false;
+  $('sqmark').style.left = 'calc(' + pct(v) + '% - 2px)';
+}
+
+$('meter').onpointerdown = e => {
+  dragging = true;
+  $('meter').setPointerCapture(e.pointerId);
+  previewSquelch(squelchAt(e.clientX));
+};
+$('meter').onpointermove = e => { if (dragging) previewSquelch(squelchAt(e.clientX)); };
+$('meter').onpointerup = e => {
+  if (!dragging) return;
+  dragging = false;
+  $('meter').releasePointerCapture(e.pointerId);
+  commitSquelch(squelchAt(e.clientX));
 };
 
 $('sqauto').onclick = async () => {
@@ -338,15 +390,23 @@ function draw() {
   $('freq').textContent = mhz(state.freq_hz);
   $('who').textContent = state.name || '';
 
-  // The meter is scaled to the squelch rather than to full scale: what
-  // matters is whether this is above the threshold, not what fraction of
-  // the ADC it happens to be using.
-  const top = Math.max(state.squelch * 2, 0.12);
-  $('sig').style.width = Math.min(100, (state.level / top) * 100) + '%';
-  $('lvl').textContent = state.level.toFixed(3);
-  const mark = $('sqmark');
-  mark.hidden = !state.squelch;
-  if (state.squelch) mark.style.left = Math.min(99, (state.squelch / top) * 100) + '%';
+  // Everything on one fixed scale, so the bar, the recent peak and the
+  // threshold can be compared by looking at them.
+  $('sig').style.width = pct(state.level) + '%';
+  $('pk').style.left = 'calc(' + pct(state.peak) + '% - 1px)';
+  $('pk').title = 'static has reached ' + state.peak.toFixed(3) + ' lately';
+  $('meter').classList.toggle('open', state.busy);
+  // The bar already shows the instant level; the number worth reading
+  // is the one the threshold has to clear.
+  $('lvl').textContent = state.peak.toFixed(3);
+
+  // While dragging, what is on screen is what the pointer says, not what
+  // the server last agreed to.
+  if (!dragging && pending === null) {
+    $('sqv').textContent = state.squelch.toFixed(3);
+    $('sqmark').hidden = !state.squelch;
+    if (state.squelch) $('sqmark').style.left = 'calc(' + pct(state.squelch) + '% - 2px)';
+  }
 
   const st = $('status');
   if (!state.on_air) { st.textContent = 'the radio is on another receiver'; st.className = 'idle'; }
@@ -374,13 +434,9 @@ function draw() {
   }
   $('listen').textContent = playing ? 'Audio off' : 'Audio on';
   $('listen').className = playing ? 'on' : 'go';
-  if (document.activeElement !== $('squelch')) {
-    $('squelch').value = state.squelch;
-    $('sqv').textContent = state.squelch.toFixed(3);
-  }
   // Say which squelch is being adjusted, so a setting made here is not a
   // surprise on the next channel.
-  $('sqwhat').textContent = state.on_channel ? 'squelch · this channel' : 'squelch · all';
+  $('sqwhat').textContent = state.on_channel ? 'squelch (this channel)' : 'squelch (all)';
   $('sqauto').hidden = !state.override;
 
   if (!editing) {

@@ -197,3 +197,43 @@ func TestAMIsAsLoudForAWeakSignalAsAStrongOne(t *testing.T) {
 		t.Errorf("strong peaks at %d and weak at %d, a ratio of %.1f", strong, weak, ratio)
 	}
 }
+
+// The squelch decides once per block, about every fifty milliseconds,
+// and a page watching it looks perhaps once in fifteen of those. Showing
+// only the instant means static that got through did so on a block
+// nobody saw, and the meter disagrees with what is audible — so it has
+// to report what the squelch has been reacting to, not just the moment
+// it was asked.
+func TestAMPeakRemembersRecentStatic(t *testing.T) {
+	a := NewAM()
+	out := make([]int16, 1<<16)
+
+	// A burst, then quiet.
+	a.Process(modulateAM(t, 0.1, 1000, 0.8, 0.5, 0), out)
+	burst := a.Peak()
+	if burst < a.Level() {
+		t.Fatalf("peak %.4f is below the level %.4f that set it", burst, a.Level())
+	}
+
+	// The level is the strongest reading within a block, so the block
+	// straight after a burst still contains its decaying tail. Give it
+	// a couple before asking.
+	for range 3 {
+		a.Process(modulateAM(t, 0.05, 1000, 0, 0.001, 0.005), out)
+	}
+	if a.Level() >= burst*0.5 {
+		t.Fatalf("the level did not fall after the burst: %.4f", a.Level())
+	}
+	if a.Peak() <= a.Level() {
+		t.Error("the peak forgot the burst immediately, which is what the meter needed it for")
+	}
+
+	// But it must let go eventually, or it is a record rather than a meter.
+	for range 60 {
+		a.Process(modulateAM(t, 0.05, 1000, 0, 0.001, 0.005), out)
+	}
+	if a.Peak() > burst*0.2 {
+		t.Errorf("peak is still %.4f of an old burst at %.4f — it is not decaying",
+			a.Peak(), burst)
+	}
+}

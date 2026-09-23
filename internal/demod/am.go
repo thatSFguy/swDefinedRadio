@@ -64,6 +64,7 @@ type AM struct {
 
 	open  bool
 	level float64
+	hold  float64
 
 	cplx, ifbuf, narrow []complex128
 	aud                 []float64
@@ -89,9 +90,25 @@ func NewAM() *AM {
 	}
 }
 
-// Level is the carrier strength, which is what a signal meter should
-// show and what the squelch is compared against.
+// Level is the carrier strength this instant, which is what the squelch
+// was compared against for the block just processed.
 func (a *AM) Level() float64 { return a.level }
+
+// Peak is the strongest the carrier has been over the last second or so.
+//
+// The squelch decides once per block, about every fifty milliseconds,
+// and anything watching this is doing so far less often — so what it
+// sees is one block in ten or twenty. Static that got through did so on
+// a block nobody looked at, which makes a meter showing only the instant
+// disagree with what is audibly happening. This is what the squelch has
+// actually been reacting to.
+func (a *AM) Peak() float64 { return a.hold }
+
+// holdDecay is applied once per block. At about fifty milliseconds a
+// block this falls by half in roughly a second: long enough to see a
+// burst of static that has just passed, short enough to follow the band
+// rather than remember it.
+const holdDecay = 0.965
 
 // Open reports whether the squelch is passing audio.
 func (a *AM) Open() bool { return a.open }
@@ -135,6 +152,11 @@ func (a *AM) Process(iq []byte, out []int16) int {
 	// Decide once per block rather than per sample, so the squelch
 	// cannot chatter in the middle of a word.
 	a.level = peak
+	if h := a.hold * holdDecay; peak > h {
+		a.hold = peak
+	} else {
+		a.hold = h
+	}
 	a.open = a.Squelch <= 0 || peak >= a.Squelch
 
 	if k > len(out) {
