@@ -110,41 +110,40 @@ func (a *App) Discover(ctx context.Context, src sdr.Source) ([]Channel, error) {
 	return found, nil
 }
 
-// DiscoverInto sweeps and adds whatever it finds to the channel list,
-// leaving the channels already there alone — including their names,
-// which a sweep cannot know and a person has probably supplied.
+// DiscoverInto sweeps and offers what it finds as candidates, rather
+// than adding them.
 //
-// A sweep only hears what is transmitting while it runs, and this band
-// is silent between transmissions, so one pass finds whoever happened to
-// be talking. That makes it a good way to bootstrap a list and a poor
-// way to be sure of one; it is worth running again.
+// A sweep proves something was transmitting on a frequency. It does not
+// prove the frequency is worth keeping: an intermittent noise source, a
+// harmonic of something else, or a distant airport heard once all look
+// the same to it on the one pass it gets. Nineteen entries added
+// unasked is a channel list nobody trusts.
+//
+// So the answer is a shortlist. Listening to one is the test a sweep
+// cannot do — if there is speech on it, it is a channel — and that is a
+// judgement only somebody with the audio can make.
 func (a *App) DiscoverInto(ctx context.Context, src sdr.Source) ([]Channel, error) {
 	found, err := a.Discover(ctx, src)
 	if err != nil {
 		return nil, err
 	}
 
-	a.mu.RLock()
-	have := slices.Clone(a.channels)
-	a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	var added []Channel
+	var fresh []Channel
 	for _, c := range found {
-		if slices.ContainsFunc(have, func(x Channel) bool { return x.Hz == c.Hz }) {
+		known := slices.ContainsFunc(a.channels, func(x Channel) bool { return x.Hz == c.Hz })
+		offered := slices.ContainsFunc(a.candidates, func(x Channel) bool { return x.Hz == c.Hz })
+		if known || offered {
 			continue
 		}
-		have = append(have, c)
-		added = append(added, c)
+		fresh = append(fresh, c)
 	}
-	if len(added) == 0 {
-		return nil, nil
+	a.candidates = append(a.candidates, fresh...)
+	slices.SortFunc(a.candidates, func(x, y Channel) int { return int(x.Hz) - int(y.Hz) })
+	for _, c := range fresh {
+		log.Printf("found %s — listen to it before keeping it", c.Name)
 	}
-	slices.SortFunc(have, func(x, y Channel) int { return int(x.Hz) - int(y.Hz) })
-	if err := a.SetChannels(have); err != nil {
-		return nil, err
-	}
-	for _, c := range added {
-		log.Printf("found %s", c.Name)
-	}
-	return added, nil
+	return fresh, nil
 }

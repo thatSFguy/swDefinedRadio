@@ -142,3 +142,107 @@ func TestNearbyPeaksBecomeOneChannel(t *testing.T) {
 		t.Errorf("two sightings of one channel produced %d entries", n)
 	}
 }
+
+// A sweep offers; it does not decide. Nineteen entries added unasked is
+// a channel list nobody trusts, and the test a sweep cannot perform —
+// is there speech on it — needs somebody listening.
+func TestSweepingOffersRatherThanAdds(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	before := len(a.State().Channels)
+
+	a.mu.Lock()
+	a.candidates = []Channel{{"120.825 MHz", 120_825_000}, {"124.925 MHz", 124_925_000}}
+	a.mu.Unlock()
+
+	st := a.State()
+	if len(st.Channels) != before {
+		t.Errorf("channels grew to %d without anyone keeping anything", len(st.Channels))
+	}
+	if len(st.Candidates) != 2 {
+		t.Errorf("%d candidates offered, want 2", len(st.Candidates))
+	}
+}
+
+// Keeping one moves it across, under whatever name it is given.
+func TestKeepingACandidate(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	a.mu.Lock()
+	a.candidates = []Channel{{"120.825 MHz", 120_825_000}}
+	a.mu.Unlock()
+
+	if err := a.Keep(120_825_000, "Tower"); err != nil {
+		t.Fatalf("Keep: %v", err)
+	}
+	st := a.State()
+	if len(st.Candidates) != 0 {
+		t.Errorf("%d candidates left after keeping the only one", len(st.Candidates))
+	}
+	i := -1
+	for j, c := range st.Channels {
+		if c.Hz == 120_825_000 {
+			i = j
+		}
+	}
+	if i < 0 {
+		t.Fatal("the kept channel is not in the list")
+	}
+	if st.Channels[i].Name != "Tower" {
+		t.Errorf("name = %q, want Tower", st.Channels[i].Name)
+	}
+}
+
+// Keeping without naming it keeps the frequency as the name, rather than
+// leaving a blank row.
+func TestKeepingWithoutANameUsesTheFrequency(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	a.mu.Lock()
+	a.candidates = []Channel{{"120.825 MHz", 120_825_000}}
+	a.mu.Unlock()
+
+	if err := a.Keep(120_825_000, "   "); err != nil {
+		t.Fatalf("Keep: %v", err)
+	}
+	for _, c := range a.State().Channels {
+		if c.Hz == 120_825_000 && c.Name != "120.825 MHz" {
+			t.Errorf("name = %q", c.Name)
+		}
+	}
+}
+
+// Discarding drops it without touching the channel list.
+func TestDismissingACandidate(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	a.mu.Lock()
+	a.candidates = []Channel{{"120.825 MHz", 120_825_000}}
+	a.mu.Unlock()
+
+	a.Dismiss(120_825_000)
+	st := a.State()
+	if len(st.Candidates) != 0 {
+		t.Error("the candidate survived being discarded")
+	}
+	if len(st.Channels) != 1 {
+		t.Errorf("the channel list changed: %d entries", len(st.Channels))
+	}
+}
+
+func TestKeepingSomethingNeverFound(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	if err := a.Keep(118_100_000, "Nope"); err == nil {
+		t.Error("kept a frequency that was never offered")
+	}
+}
+
+// Auditioning a candidate should still name it on the dial, or the
+// display goes blank at the moment somebody is deciding about it.
+func TestACandidateBeingListenedToIsNamed(t *testing.T) {
+	a := testApp(t, Channel{"Guard", Guard})
+	a.mu.Lock()
+	a.candidates = []Channel{{"120.825 MHz", 120_825_000}}
+	a.mu.Unlock()
+
+	_ = a.Tune(120_825_000)
+	if got := a.State().Name; got == "" {
+		t.Error("the dial went blank while auditioning a candidate")
+	}
+}

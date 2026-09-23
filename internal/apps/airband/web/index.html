@@ -73,6 +73,22 @@
   .add input.name { flex:1; }
   .add input.hz { width:96px; font-variant-numeric:tabular-nums; }
 
+  .cand li { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:7px;
+             border:1px solid transparent; }
+  .cand li.on { border-color:var(--accent); background:#161b22; }
+  .cand li.busy { border-color:var(--ok); background:#12211a; }
+  .cand .f { font-variant-numeric:tabular-nums; min-width:76px; }
+  .cand input {
+    flex:1; min-width:0; background:var(--bg); border:1px solid var(--line);
+    border-radius:6px; color:var(--fg); font:inherit; font-size:12px; padding:4px 7px;
+  }
+  .cand input:focus { border-color:var(--accent); outline:none; }
+  .cand button { padding:4px 10px; font-size:12px; }
+  .cand .keep { color:var(--ok); border-color:#1f6f3f; }
+  .cand .keep:hover { border-color:var(--ok); }
+  .cand .drop { color:var(--dim); }
+  .cand .drop:hover { color:var(--bad); border-color:var(--bad); }
+  .note { color:var(--dim); font-size:12px; margin:0 0 10px; }
   .heard li { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #21262d;
               color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
   .heard .t { color:var(--dim); }
@@ -101,6 +117,15 @@
     <span class="sq" id="sqv">0.000</span>
   </div>
   <audio id="audio" hidden></audio>
+</div>
+
+<div class="card" id="foundcard" hidden>
+  <h1>Found by sweeping</h1>
+  <p class="note">
+    A sweep only proves something was transmitting. Listen to each one —
+    if there is speech, it is worth keeping.
+  </p>
+  <ul class="cand" id="candidates"></ul>
 </div>
 
 <div class="card">
@@ -180,7 +205,7 @@ $('sweep').onclick = async () => {
     state = d.state;
     const n = (d.found || []).length;
     $('sweepnote').textContent = n
-      ? 'added ' + d.found.map(c => c.name).join(', ')
+      ? 'found ' + n + ' — listen to them above before keeping'
       : 'nothing new — channels are quiet unless somebody is talking';
     draw();
   } else {
@@ -206,6 +231,52 @@ async function removeChannel(hz) {
   const list = state.channels.filter(c => c.hz !== hz);
   const d = await post('/api/channels', { channels: list });
   if (d) { state = d; draw(); }
+}
+
+async function keep(hz, name) {
+  const d = await post('/api/keep', { freq_hz: hz, name });
+  if (d) { state = d; draw(); }
+}
+
+async function dismiss(hz) {
+  const d = await post('/api/dismiss', { freq_hz: hz });
+  if (d) { state = d; draw(); }
+}
+
+// Auditioning a candidate is just tuning to it: the meter shows whether
+// anything is there and the audio says whether it is speech.
+function candidateRow(c) {
+  const li = document.createElement('li');
+  const here = c.hz === state.freq_hz;
+  li.className = (here ? 'on ' : '') + (here && state.busy ? 'busy' : '');
+
+  const f = document.createElement('span');
+  f.className = 'f';
+  f.textContent = mhz(c.hz);
+
+  const listen = document.createElement('button');
+  listen.textContent = here ? '● listening' : 'Listen';
+  listen.disabled = here;
+  listen.onclick = () => tune(c.hz);
+
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.placeholder = 'name it, e.g. Tower';
+  name.onfocus = () => { editing = true; };
+  name.onblur = () => { editing = false; };
+  name.onkeydown = e => { if (e.key === 'Enter') keep(c.hz, name.value); };
+
+  const k = document.createElement('button');
+  k.className = 'keep'; k.textContent = 'Keep';
+  k.title = 'add this to the channel list';
+  k.onclick = () => keep(c.hz, name.value);
+
+  const x = document.createElement('button');
+  x.className = 'drop'; x.textContent = 'Discard';
+  x.onclick = () => dismiss(c.hz);
+
+  li.append(f, listen, name, k, x);
+  return li;
 }
 
 async function tune(hz) {
@@ -262,6 +333,10 @@ function draw() {
       return li;
     }));
   }
+
+  const cands = state.candidates || [];
+  $('foundcard').hidden = cands.length === 0;
+  if (!editing) $('candidates').replaceChildren(...cands.map(candidateRow));
 
   const heard = state.heard || [];
   $('hempty').hidden = heard.length > 0;

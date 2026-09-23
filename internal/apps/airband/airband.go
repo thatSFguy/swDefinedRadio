@@ -103,6 +103,11 @@ type App struct {
 	src      sdr.Source
 	heard    []Heard
 
+	// candidates are what a sweep turned up and nobody has decided about
+	// yet. They are deliberately not channels: a sweep can say something
+	// transmitted, not that it is worth keeping.
+	candidates []Channel
+
 	// fresh means no saved channel list was found, so a sweep on the
 	// first run is a help rather than an interruption.
 	fresh    bool
@@ -181,8 +186,9 @@ type State struct {
 	Busy     bool      `json:"busy"`
 	Level    float64   `json:"level"`
 	Squelch  float64   `json:"squelch"`
-	Channels []Channel `json:"channels"`
-	Sweeping bool      `json:"sweeping"`
+	Channels   []Channel `json:"channels"`
+	Candidates []Channel `json:"candidates"`
+	Sweeping   bool      `json:"sweeping"`
 	Heard    []Heard   `json:"heard"`
 	OnAir    bool      `json:"on_air"`
 	Rate     int       `json:"audio_rate"`
@@ -200,8 +206,9 @@ func (a *App) State() State {
 		Freq: a.freq, Name: a.nameOfLocked(a.freq),
 		Scanning: a.scanning, Busy: a.busy,
 		Level: a.am.Level(), Squelch: a.am.Squelch,
-		Channels: slices.Clone(a.channels),
-		Sweeping: a.sweeping,
+		Channels:   slices.Clone(a.channels),
+		Candidates: slices.Clone(a.candidates),
+		Sweeping:   a.sweeping,
 		Heard:    heard,
 		OnAir:    a.src != nil,
 		Rate:     demod.AudioRate,
@@ -214,7 +221,41 @@ func (a *App) nameOfLocked(hz uint32) string {
 			return c.Name
 		}
 	}
+	// A candidate being listened to is still worth naming, or the dial
+	// goes blank at exactly the moment somebody is deciding about it.
+	for _, c := range a.candidates {
+		if c.Hz == hz {
+			return c.Name + " — candidate"
+		}
+	}
 	return ""
+}
+
+// Keep promotes a candidate to a channel, under whatever name is given.
+func (a *App) Keep(hz uint32, name string) error {
+	a.mu.Lock()
+	i := slices.IndexFunc(a.candidates, func(c Channel) bool { return c.Hz == hz })
+	if i < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("%s is not one of the channels found", MHz(hz))
+	}
+	c := a.candidates[i]
+	if name = strings.TrimSpace(name); name != "" {
+		c.Name = name
+	}
+	list := append(slices.Clone(a.channels), c)
+	a.candidates = slices.Delete(a.candidates, i, i+1)
+	a.mu.Unlock()
+
+	slices.SortFunc(list, func(x, y Channel) int { return int(x.Hz) - int(y.Hz) })
+	return a.SetChannels(list)
+}
+
+// Dismiss drops a candidate without keeping it.
+func (a *App) Dismiss(hz uint32) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.candidates = slices.DeleteFunc(a.candidates, func(c Channel) bool { return c.Hz == hz })
 }
 
 // Audio is the fan-out the page and the speaker listen to.

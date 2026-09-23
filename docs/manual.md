@@ -824,6 +824,59 @@ grid — is correct to about a kilohertz.
 ./bin/scanner -once -start 470M -stop 600M -threshold 14
 ```
 
+## airband
+
+Aircraft voice, on the AM channels between 118 and 137 MHz. The 1090 MHz
+receiver shows where aircraft are; this one lets you hear them. One
+dongle cannot do both, so they are separate tabs.
+
+### Finding channels
+
+Tower, ground and approach frequencies differ at every airport, so the
+receiver ships only with the ones that mean the same thing everywhere —
+121.5 guard, unicom, CTAF. **Find channels** sweeps the band and offers
+what it heard.
+
+It offers rather than adds, and the difference matters. A sweep proves
+something was transmitting on a frequency; it does not prove the
+frequency is worth keeping. An intermittent noise source, a harmonic, or
+a distant airport heard once all look identical on the one pass it gets.
+So each result gets a **Listen** button: tune to it, and if there is
+speech, **Keep** it under a name. If there is hiss, **Discard** it.
+
+Three kinds of rubbish are filtered out before anything is offered:
+
+* **Spurs.** The receiver's own 4.8 MHz clock produces peaks at
+  multiples of itself, and they are often the strongest things in the
+  band. The sweeper already recognises them.
+* **Off-grid peaks.** Airband sits on a 25 kHz grid and a sweep resolves
+  a few kHz, so results are snapped to the nearest channel. One sitting
+  halfway between two is either mismeasured or one of the 8.33 kHz
+  channels, and is dropped rather than guessed at.
+* **Peaks too wide to be voice.** An AM channel is about 8 kHz of speech
+  in a 25 kHz slot. Anything far broader is not somebody talking.
+
+### Scanning
+
+The band is silent between transmissions, so scanning matters more than
+tuning. It moves along the list, stops on whoever keys up, and holds the
+channel for a moment after they stop — the reply comes back on the same
+frequency, and moving on between the two halves of an exchange is the
+most annoying thing a scanner can do.
+
+Choosing a channel parks on it and stops the scan.
+
+### Squelch
+
+The one control that matters here. It compares the carrier level against
+a threshold, which works well on AM because an idle airband channel has
+no carrier at all. The meter shows the current level and marks where the
+threshold sits; put it just above the noise.
+
+Recovered audio is divided by the carrier, so a distant aircraft is as
+loud as a close one — what you hear is modulation depth, not how
+strongly the signal arrived.
+
 ## fm
 
 Receives one broadcast FM station and plays it, in the browser or
