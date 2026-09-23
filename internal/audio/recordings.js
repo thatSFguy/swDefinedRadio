@@ -30,6 +30,9 @@ function Recordings(root, opts = {}) {
     const st = document.createElement('style');
     st.id = 'recordings-style';
     st.textContent = `
+      /* Without this, display:flex below beats the hidden attribute on a
+         page that does not already say so itself. */
+      .rec-bar[hidden], .rec-total[hidden], .rec-empty[hidden] { display:none; }
       .rec-bar { display:flex; gap:10px; align-items:center; margin-bottom:6px;
                  font-size:12px; color:var(--dim); }
       .rec-bar label { display:flex; gap:6px; align-items:center; cursor:pointer; }
