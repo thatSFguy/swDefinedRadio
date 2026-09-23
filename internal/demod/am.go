@@ -30,6 +30,15 @@ const (
 	AMBandwidth = 8_000
 )
 
+// agcFloor is the weakest carrier the recovered audio is divided by.
+//
+// Dividing by the carrier is what makes a distant aircraft as loud as a
+// close one — the speech is a fraction of the carrier, so the fraction
+// is the signal and the carrier is just how loudly it arrived. Below
+// this there is no carrier worth speaking of, and dividing by it would
+// turn the noise floor into a roar.
+const agcFloor = 0.01
+
 // AM demodulates amplitude modulation by envelope detection.
 //
 // The envelope of an AM signal is the carrier level plus the speech on
@@ -74,7 +83,9 @@ func NewAM() *AM {
 		// keying up within a syllable, slow enough not to eat the speech
 		// it is supposed to be sitting underneath.
 		alpha: 1 - math.Exp(-2*math.Pi*20/AudioRate),
-		Gain:  16000,
+		// Audio is now a modulation depth of roughly -1 to 1, so this is
+		// close to full scale for a fully modulated transmission.
+		Gain: 9000,
 	}
 }
 
@@ -115,8 +126,10 @@ func (a *AM) Process(iq []byte, out []int16) int {
 		if a.carrier > peak {
 			peak = a.carrier
 		}
-		// What is left once the carrier is taken away is the speech.
-		a.aud[i] = env - a.carrier
+		// What is left once the carrier is taken away is the speech, and
+		// dividing by the carrier makes it modulation depth rather than
+		// a number that depends on how far away the aircraft is.
+		a.aud[i] = (env - a.carrier) / max(a.carrier, agcFloor)
 	}
 
 	// Decide once per block rather than per sample, so the squelch

@@ -97,7 +97,7 @@
   </div>
   <div class="row">
     <span class="sq">squelch</span>
-    <input type="range" id="squelch" min="0" max="0.5" step="0.005">
+    <input type="range" id="squelch" min="0" max="0.15" step="0.002">
     <span class="sq" id="sqv">0.000</span>
   </div>
   <audio id="audio" hidden></audio>
@@ -221,7 +221,7 @@ function draw() {
   // The meter is scaled to the squelch rather than to full scale: what
   // matters is whether this is above the threshold, not what fraction of
   // the ADC it happens to be using.
-  const top = Math.max(state.squelch * 2, 0.2);
+  const top = Math.max(state.squelch * 2, 0.12);
   $('sig').style.width = Math.min(100, (state.level / top) * 100) + '%';
   $('lvl').textContent = state.level.toFixed(3);
   const mark = $('sqmark');

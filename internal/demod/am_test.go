@@ -167,3 +167,33 @@ func TestAMKeepsProducingSamplesWhileMuted(t *testing.T) {
 		t.Errorf("produced %d samples, want about %d", n, want)
 	}
 }
+
+// A real aircraft produces a carrier a long way below full scale — the
+// ones this was written against measured around 0.04, where the first
+// version of this test used 0.5. Recovered audio must not be twelve
+// times quieter for being twelve times further away: dividing by the
+// carrier is what turns the envelope into modulation depth.
+func TestAMIsAsLoudForAWeakSignalAsAStrongOne(t *testing.T) {
+	peakOf := func(carrier float64) int {
+		a := NewAM()
+		out := make([]int16, 1<<16)
+		n := a.Process(modulateAM(t, 0.3, 1000, 0.8, carrier, 0), out)
+		peak := 0
+		for _, v := range out[n/3 : n] { // past the carrier tracker settling
+			if int(v) > peak {
+				peak = int(v)
+			}
+		}
+		return peak
+	}
+
+	strong, weak := peakOf(0.5), peakOf(0.04)
+	if weak < 4000 {
+		t.Errorf("a realistic signal peaks at %d out of 32767, which is inaudible", weak)
+	}
+	// Within a factor of two of each other, rather than the factor of
+	// twelve their carriers differ by.
+	if ratio := float64(strong) / float64(weak); ratio > 2 || ratio < 0.5 {
+		t.Errorf("strong peaks at %d and weak at %d, a ratio of %.1f", strong, weak, ratio)
+	}
+}

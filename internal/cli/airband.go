@@ -22,7 +22,7 @@ func Airband(args []string) {
 
 	var (
 		chans   = fs.String("channels", "", "channels to scan, e.g. \"Tower:118.3,Ground:121.9\"; the saved list is used when empty")
-		squelch = fs.Float64("squelch", 0.06, "carrier level a channel must reach to count as busy; 0 opens it")
+		squelch = fs.Float64("squelch", 0.03, "carrier level a channel must reach to count as busy; 0 opens it")
 		gain    = fs.Float64("gain", -1, "tuner gain in dB, or -1 for automatic")
 		ppm     = fs.Int("ppm", 0, "frequency correction in ppm")
 		device  = fs.Int("device", 0, "RTL-SDR device index")
