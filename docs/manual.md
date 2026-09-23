@@ -834,27 +834,46 @@ dongle cannot do both, so they are separate tabs.
 
 Tower, ground and approach frequencies differ at every airport, so the
 receiver ships only with the ones that mean the same thing everywhere —
-121.5 guard, unicom, CTAF. **Find channels** sweeps the band and offers
-what it heard.
+121.5 guard, unicom, CTAF. **Survey the band** finds the local ones.
 
-It offers rather than adds, and the difference matters. A sweep proves
-something was transmitting on a frequency; it does not prove the
-frequency is worth keeping. An intermittent noise source, a harmonic, or
-a distant airport heard once all look identical on the one pass it gets.
-So each result gets a **Listen** button: tune to it, and if there is
-speech, **Keep** it under a name. If there is hiss, **Discard** it.
+It walks all 761 channels of the 25 kHz grid with the receiver itself,
+listening to each for a moment and keeping score, round and round. A pass
+takes about two and a half minutes; leave it running for ten.
 
-Three kinds of rubbish are filtered out before anything is offered:
+This replaced sweeping the spectrum, which does not work here and is
+worth knowing why, because it looks like it should. A sweep takes one
+look at nineteen megahertz. Airband channels are silent between
+transmissions, so in the few seconds it lasts, perhaps one aircraft
+anywhere is talking — and everything else it reports is a bump. Filtering
+the obvious rubbish still left a list that was mostly rubbish, because
+the thing being measured, power once, does not distinguish a voice
+channel from a lump. A real sweep here offered twenty-three channels and
+every one of them was static.
 
-* **Spurs.** The receiver's own 4.8 MHz clock produces peaks at
-  multiples of itself, and they are often the strongest things in the
-  band. The sweeper already recognises them.
-* **Off-grid peaks.** Airband sits on a 25 kHz grid and a sweep resolves
-  a few kHz, so results are snapped to the nearest channel. One sitting
-  halfway between two is either mismeasured or one of the 8.33 kHz
-  channels, and is dropped rather than guessed at.
-* **Peaks too wide to be voice.** An AM channel is about 8 kHz of speech
-  in a 25 kHz slot. Anything far broader is not somebody talking.
+What does distinguish a voice channel is that traffic comes and goes:
+
+* a carrier that is **never** there is noise,
+* a carrier that is **always** there is a spur — the receiver's own
+  4.8 MHz harmonics land squarely in this band,
+* a carrier that appears for four seconds and vanishes is somebody
+  talking.
+
+So the survey scores openings and their length, and counts separately the
+visits where the carrier never stopped. A channel is offered when it has
+been heard on and is not mostly constant. In practice that is a handful
+of frequencies with two or three seconds of speech each, which is what
+the band actually contains.
+
+Nothing is added automatically. Each result gets a **Listen** button —
+if there is speech, **Keep** it under a name; if there is hiss,
+**Discard** it.
+
+### Squelch per channel
+
+A tower two miles away and an approach frequency fifty miles off cannot
+share a threshold: one setting either misses the far one or opens
+constantly on the near one. Each channel can carry its own, in the box
+beside it in the list; leave it blank to use the receiver's.
 
 ### Scanning
 

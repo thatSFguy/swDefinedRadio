@@ -51,16 +51,23 @@ const Guard = 121_500_000
 type Channel struct {
 	Name string `json:"name"`
 	Hz   uint32 `json:"hz"`
+
+	// Squelch overrides the receiver's own for this channel. Channels
+	// differ: a distant approach frequency needs a lower threshold than
+	// a tower two miles away, and one threshold for all of them means
+	// either missing the far one or opening constantly on the near one.
+	// Zero means use the receiver's setting.
+	Squelch float64 `json:"squelch,omitempty"`
 }
 
 // DefaultChannels are the ones that mean the same thing anywhere, since
 // tower and approach frequencies are different at every airport and
 // guessing them would be worse than leaving the list short.
 var DefaultChannels = []Channel{
-	{"Guard", Guard},
-	{"Unicom", 122_800_000},
-	{"CTAF", 122_700_000},
-	{"Unicom 123.0", 123_000_000},
+	{Name: "Guard", Hz: Guard},
+	{Name: "Unicom", Hz: 122_800_000},
+	{Name: "CTAF", Hz: 122_700_000},
+	{Name: "Unicom 123.0", Hz: 123_000_000},
 }
 
 // Config is everything the receiver needs to know.
@@ -108,6 +115,11 @@ type App struct {
 	// transmitted, not that it is worth keeping.
 	candidates []Channel
 
+	squelch   float64 // the receiver's own, where a channel says nothing
+	surveying bool
+	survey    map[uint32]*SurveyStat
+	surveyAt  time.Time
+
 	// fresh means no saved channel list was found, so a sweep on the
 	// first run is a help rather than an interruption.
 	fresh    bool
@@ -152,6 +164,7 @@ func New(cfg Config) (*App, error) {
 	}
 	a.freq = a.channels[0].Hz
 	a.fresh = !loaded
+	a.squelch = cfg.Squelch
 	a.am.Squelch = cfg.Squelch
 	a.am.Gain *= cfg.Volume
 	return a, nil
@@ -188,7 +201,8 @@ type State struct {
 	Squelch  float64   `json:"squelch"`
 	Channels   []Channel `json:"channels"`
 	Candidates []Channel `json:"candidates"`
-	Sweeping   bool      `json:"sweeping"`
+	Sweeping   bool           `json:"sweeping"`
+	Survey     SurveyProgress `json:"survey"`
 	Heard    []Heard   `json:"heard"`
 	OnAir    bool      `json:"on_air"`
 	Rate     int       `json:"audio_rate"`
@@ -209,6 +223,7 @@ func (a *App) State() State {
 		Channels:   slices.Clone(a.channels),
 		Candidates: slices.Clone(a.candidates),
 		Sweeping:   a.sweeping,
+		Survey:     a.surveyProgressLocked(),
 		Heard:    heard,
 		OnAir:    a.src != nil,
 		Rate:     demod.AudioRate,
@@ -286,6 +301,7 @@ func (a *App) tuneLocked(hz uint32) error {
 	a.tunedAt = a.since
 	a.lastBusy = time.Time{}
 	a.busy = false
+	a.applySquelchLocked()
 
 	if a.src == nil {
 		return ErrNotOnAir // remembered for when the radio comes back
@@ -294,35 +310,6 @@ func (a *App) tuneLocked(hz uint32) error {
 		return fmt.Errorf("tune: %w", err)
 	}
 	return nil
-}
-
-// Sweep looks for channels now, if the radio is here to do it with.
-func (a *App) Sweep(ctx context.Context) ([]Channel, error) {
-	a.mu.Lock()
-	src, busy := a.src, a.sweeping
-	if src == nil {
-		a.mu.Unlock()
-		return nil, ErrNotOnAir
-	}
-	if busy {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("already sweeping")
-	}
-	a.sweeping, src = true, a.src
-	here := a.freq
-	a.mu.Unlock()
-
-	found, err := a.DiscoverInto(ctx, src)
-
-	a.mu.Lock()
-	a.sweeping = false
-	a.mu.Unlock()
-	// Put the radio back where it was; a sweep leaves it at the top of
-	// the band.
-	if e := src.Tune(here); e != nil && err == nil {
-		err = e
-	}
-	return found, err
 }
 
 // SetScanning starts or stops moving between channels.
@@ -336,8 +323,39 @@ func (a *App) SetScanning(on bool) {
 // SetSquelch changes the level a channel must reach to count as busy.
 func (a *App) SetSquelch(v float64) {
 	a.mu.Lock()
-	a.am.Squelch = max(v, 0)
+	defer a.mu.Unlock()
+	a.squelch = max(v, 0)
+	a.applySquelchLocked()
+}
+
+// applySquelchLocked puts the threshold for the current channel into the
+// demodulator, falling back to the receiver's own where a channel has
+// nothing to say about it.
+func (a *App) applySquelchLocked() {
+	sq := a.squelch
+	for _, c := range a.channels {
+		if c.Hz == a.freq && c.Squelch > 0 {
+			sq = c.Squelch
+			break
+		}
+	}
+	a.am.Squelch = sq
+}
+
+// SetChannelSquelch sets the threshold for one channel. Zero returns it
+// to the receiver's own.
+func (a *App) SetChannelSquelch(hz uint32, v float64) error {
+	a.mu.Lock()
+	i := slices.IndexFunc(a.channels, func(c Channel) bool { return c.Hz == hz })
+	if i < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("%s is not one of the channels", MHz(hz))
+	}
+	a.channels[i].Squelch = max(v, 0)
+	list := slices.Clone(a.channels)
+	a.applySquelchLocked()
 	a.mu.Unlock()
+	return a.SetChannels(list)
 }
 
 // SetChannels replaces the list and saves it.
@@ -499,23 +517,15 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 	}
 	log.Printf("listening on %s", MHz(start))
 
-	// Sweeping needs the radio to itself, so it happens before listening
-	// starts rather than alongside it.
+	// A first run with no channel list starts a survey, because the list
+	// it would otherwise scan is four generic frequencies and the
+	// interesting ones are exactly what is not known.
 	if a.cfg.Discover && a.fresh {
 		a.mu.Lock()
-		a.fresh, a.sweeping = false, true
+		a.fresh = false
 		a.mu.Unlock()
-		log.Print("sweeping the band for active channels…")
-		if _, err := a.DiscoverInto(ctx, src); err != nil && ctx.Err() == nil {
-			log.Printf("channel sweep: %v", err)
-		}
-		a.mu.Lock()
-		a.sweeping = false
-		next := a.freq
-		a.mu.Unlock()
-		if err := src.Tune(next); err != nil {
-			return fmt.Errorf("tune: %w", err)
-		}
+		log.Print("no channels known yet — surveying the band, which takes a few minutes")
+		a.StartSurvey()
 	}
 
 	if a.cfg.Speaker {
@@ -559,6 +569,18 @@ func (a *App) step() {
 	}
 
 	open := a.am.Open()
+	if a.surveying {
+		if open != a.busy {
+			if open {
+				a.since = now
+			} else {
+				a.recordLocked(now.Sub(a.since))
+			}
+		}
+		a.surveyStep(now, open)
+		a.busy = open
+		return
+	}
 	switch {
 	case open && !a.busy:
 		a.since = now // somebody keyed up

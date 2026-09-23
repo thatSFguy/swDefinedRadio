@@ -110,49 +110,49 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 		web.WriteJSON(w, a.State())
 	})
 
-	// Sweeping needs the radio, so it is a request that can be refused
-	// for a reason that is nobody's fault.
-	mux.HandleFunc("POST /api/sweep", func(w http.ResponseWriter, r *http.Request) {
-		found, err := a.Sweep(r.Context())
-		switch {
-		case errors.Is(err, ErrNotOnAir):
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		case err != nil:
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		web.WriteJSON(w, map[string]any{"found": found, "state": a.State()})
-	})
-
-	// Keeping a candidate is a separate act from finding it, because the
-	// test a sweep cannot do — is there speech on it — happens in
-	// between, and only somebody listening can apply it.
-	mux.HandleFunc("POST /api/keep", func(w http.ResponseWriter, r *http.Request) {
+	// A survey walks the whole 25 kHz grid with the receiver itself,
+	// scoring which channels anything is ever heard on. It takes
+	// minutes rather than seconds, and unlike a sweep it answers the
+	// question actually being asked.
+	mux.HandleFunc("POST /api/survey", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			FreqHz float64 `json:"freq_hz"`
-			Name   string  `json:"name"`
+			Running bool `json:"running"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if err := a.Keep(uint32(req.FreqHz), req.Name); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		if req.Running {
+			a.StartSurvey()
+		} else {
+			a.StopSurvey()
 		}
 		web.WriteJSON(w, a.State())
 	})
 
-	mux.HandleFunc("POST /api/dismiss", func(w http.ResponseWriter, r *http.Request) {
+	// What the survey heard, offered as candidates to listen to.
+	mux.HandleFunc("POST /api/survey/offer", func(w http.ResponseWriter, r *http.Request) {
+		found := a.OfferSurveyed()
+		web.WriteJSON(w, map[string]any{"found": found, "state": a.State()})
+	})
+
+	mux.HandleFunc("GET /api/survey", func(w http.ResponseWriter, r *http.Request) {
+		web.WriteJSON(w, map[string]any{"heard": a.SurveyResults()})
+	})
+
+	mux.HandleFunc("POST /api/channel/squelch", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			FreqHz float64 `json:"freq_hz"`
+			FreqHz  float64 `json:"freq_hz"`
+			Squelch float64 `json:"squelch"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		a.Dismiss(uint32(req.FreqHz))
+		if err := a.SetChannelSquelch(uint32(req.FreqHz), req.Squelch); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		web.WriteJSON(w, a.State())
 	})
 

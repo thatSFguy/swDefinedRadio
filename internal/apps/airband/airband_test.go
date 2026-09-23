@@ -50,9 +50,9 @@ func TestParseChannels(t *testing.T) {
 		t.Fatalf("ParseChannels: %v", err)
 	}
 	want := []Channel{
-		{"Tower", 118_300_000},
-		{"Ground", 121_900_000},
-		{"121.500 MHz", 121_500_000}, // unnamed channels name themselves
+		{Name: "Tower", Hz: 118_300_000},
+		{Name: "Ground", Hz: 121_900_000},
+		{Name: "121.500 MHz", Hz: 121_500_000}, // unnamed channels name themselves
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
@@ -65,7 +65,7 @@ func TestParseChannels(t *testing.T) {
 // Nothing outside 118–137 MHz belongs here, and accepting it would leave
 // the receiver somewhere it can hear nothing.
 func TestTuneRefusesOutsideTheBand(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
 	for _, hz := range []uint32{98_700_000, 1_090_000_000, 137_500_000} {
 		if err := a.Tune(hz); err == nil {
 			t.Errorf("%s was accepted", MHz(hz))
@@ -77,7 +77,7 @@ func TestTuneRefusesOutsideTheBand(t *testing.T) {
 // the scan — otherwise it moves on a moment later and the click did
 // nothing.
 func TestTuningStopsScanning(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard}, Channel{"Unicom", 122_800_000})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard}, Channel{Name: "Unicom", Hz: 122_800_000})
 	if !a.State().Scanning {
 		t.Fatal("expected to start scanning")
 	}
@@ -100,7 +100,7 @@ func TestChannelsAreSaved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	list := []Channel{{"Tower", 118_300_000}, {"Approach", 125_350_000}}
+	list := []Channel{{Name: "Tower", Hz: 118_300_000}, {Name: "Approach", Hz: 125_350_000}}
 	if err := a.SetChannels(list); err != nil {
 		t.Fatalf("SetChannels: %v", err)
 	}
@@ -115,11 +115,11 @@ func TestChannelsAreSaved(t *testing.T) {
 }
 
 func TestSetChannelsRejectsRubbish(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
 	if err := a.SetChannels(nil); err == nil {
 		t.Error("an empty channel list was accepted")
 	}
-	if err := a.SetChannels([]Channel{{"FM", 98_700_000}}); err == nil {
+	if err := a.SetChannels([]Channel{{Name: "FM", Hz: 98_700_000}}); err == nil {
 		t.Error("a frequency outside the band was accepted")
 	}
 }
@@ -127,10 +127,10 @@ func TestSetChannelsRejectsRubbish(t *testing.T) {
 // Deleting the channel being listened to has to move the receiver, or it
 // sits on a frequency the page no longer lists.
 func TestDeletingTheTunedChannelMovesOn(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard}, Channel{"Unicom", 122_800_000})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard}, Channel{Name: "Unicom", Hz: 122_800_000})
 	_ = a.Tune(122_800_000)
 
-	if err := a.SetChannels([]Channel{{"Guard", Guard}}); err != nil {
+	if err := a.SetChannels([]Channel{{Name: "Guard", Hz: Guard}}); err != nil {
 		t.Fatalf("SetChannels: %v", err)
 	}
 	if got := a.State().Freq; got != Guard {
@@ -141,7 +141,7 @@ func TestDeletingTheTunedChannelMovesOn(t *testing.T) {
 // An unnamed channel names itself after its frequency, so the list never
 // shows a blank row.
 func TestUnnamedChannelsGetAName(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
 	if err := a.SetChannels([]Channel{{Hz: 118_300_000}}); err != nil {
 		t.Fatalf("SetChannels: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestUnnamedChannelsGetAName(t *testing.T) {
 // Squelch is the one control that matters on a band which is silent most
 // of the time, and a negative one would mean nothing.
 func TestSquelchCannotGoNegative(t *testing.T) {
-	a := testApp(t, Channel{"Guard", Guard})
+	a := testApp(t, Channel{Name: "Guard", Hz: Guard})
 	a.SetSquelch(-1)
 	if got := a.State().Squelch; got != 0 {
 		t.Errorf("squelch = %v, want 0", got)
@@ -189,7 +189,7 @@ func TestScanTimingIsUsable(t *testing.T) {
 // Moving to a channel must not carry the previous one's history with
 // it, or every channel inherits the last one's hang and the scan crawls.
 func TestTuningClearsTheHoldFromTheLastChannel(t *testing.T) {
-	a := testApp(t, Channel{"A", 118_100_000}, Channel{"B", 118_200_000})
+	a := testApp(t, Channel{Name: "A", Hz: 118_100_000}, Channel{Name: "B", Hz: 118_200_000})
 	a.mu.Lock()
 	a.lastBusy = time.Now()
 	a.mu.Unlock()

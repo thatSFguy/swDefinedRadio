@@ -60,6 +60,10 @@
   .ch li.busy { border-color:var(--ok); }
   .ch .n { flex:1; }
   .ch .f { color:var(--dim); font-variant-numeric:tabular-nums; font-size:12px; }
+  .chsq { width:62px; background:var(--bg); border:1px solid var(--line); border-radius:5px;
+          color:var(--fg); font:inherit; font-size:11px; padding:2px 5px;
+          font-variant-numeric:tabular-nums; }
+  .chsq:focus { border-color:var(--accent); outline:none; }
   .ch .x { color:var(--dim); border:0; background:none; padding:2px 6px; font-size:14px; cursor:pointer; }
   .ch .x:hover { color:var(--bad); }
   .dot { width:7px; height:7px; border-radius:50%; background:#30363d; flex:none; }
@@ -137,8 +141,9 @@
     <button id="cadd">Add</button>
   </div>
   <div class="row">
-    <button id="sweep">Find channels</button>
-    <span class="sq" id="sweepnote">sweeps the band and adds whatever is transmitting</span>
+    <button id="survey">Survey the band</button>
+    <button id="offer" hidden>Show what was heard</button>
+    <span class="sq" id="sweepnote">listens to every channel in turn and scores what talks</span>
   </div>
   <div class="err" id="cerr"></div>
 </div>
@@ -197,21 +202,22 @@ $('squelch').onchange = async () => {
   if (d) { state = d; draw(); }
 };
 
-$('sweep').onclick = async () => {
-  $('sweep').disabled = true;
-  $('sweepnote').textContent = 'sweeping…';
-  const d = await post('/api/sweep', {});
+$('survey').onclick = async () => {
+  const running = state && state.survey && state.survey.running;
+  const d = await post('/api/survey', { running: !running });
+  if (d) { state = d; draw(); }
+};
+
+$('offer').onclick = async () => {
+  const d = await post('/api/survey/offer', {});
   if (d) {
     state = d.state;
     const n = (d.found || []).length;
     $('sweepnote').textContent = n
-      ? 'found ' + n + ' — listen to them above before keeping'
-      : 'nothing new — channels are quiet unless somebody is talking';
+      ? 'offered ' + n + ' — listen to them below'
+      : 'nothing new to offer yet';
     draw();
-  } else {
-    $('sweepnote').textContent = 'sweeps the band and adds whatever is transmitting';
   }
-  $('sweep').disabled = false;
 };
 
 $('cadd').onclick = addChannel;
@@ -306,8 +312,20 @@ function draw() {
   else { st.textContent = 'quiet'; st.className = 'idle'; }
 
   $('scan').className = state.scanning ? 'on' : '';
-  $('sweep').disabled = state.sweeping || !state.on_air;
-  if (state.sweeping) $('sweepnote').textContent = 'sweeping…';
+  // A survey takes minutes, so it has to say where it has got to.
+  const sv = state.survey || {};
+  $('survey').textContent = sv.running ? '■ Stop survey' : 'Survey the band';
+  $('survey').className = sv.running ? 'on' : '';
+  $('survey').disabled = !state.on_air;
+  $('offer').hidden = !sv.found;
+  $('offer').textContent = 'Show ' + sv.found + ' heard';
+  if (sv.running) {
+    $('sweepnote').textContent =
+      sv.looked + ' of ' + sv.total + ' channels · ' + sv.passes.toFixed(1) +
+      ' passes · heard on ' + sv.found + ' · ' + Math.round(sv.seconds) + 's';
+  } else if (!sv.found) {
+    $('sweepnote').textContent = 'listens to every channel in turn and scores what talks';
+  }
   $('listen').textContent = playing ? '■ Stop' : '▶ Listen';
   $('listen').className = playing ? '' : 'go';
   if (document.activeElement !== $('squelch')) {
@@ -324,12 +342,28 @@ function draw() {
       dot.className = 'dot' + (c.hz === state.freq_hz && state.busy ? ' on' : '');
       const n = document.createElement('span'); n.className = 'n'; n.textContent = c.name;
       const f = document.createElement('span'); f.className = 'f'; f.textContent = mhz(c.hz);
+      const sq = document.createElement('input');
+      sq.type = 'number'; sq.className = 'chsq';
+      sq.min = '0'; sq.max = '0.2'; sq.step = '0.002';
+      sq.value = c.squelch || '';
+      sq.placeholder = 'auto';
+      sq.title = 'squelch just for this channel; blank uses the receiver\'s';
+      sq.onclick = e => e.stopPropagation();
+      sq.onfocus = () => { editing = true; };
+      sq.onblur = async () => {
+        editing = false;
+        const d = await post('/api/channel/squelch',
+          { freq_hz: c.hz, squelch: parseFloat(sq.value) || 0 });
+        if (d) { state = d; draw(); }
+      };
+      sq.onkeydown = e => { if (e.key === 'Enter') sq.blur(); };
+
       const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
       x.title = 'remove this channel';
       x.onclick = e => { e.stopPropagation(); removeChannel(c.hz); };
       li.onclick = () => tune(c.hz);
       li.title = 'listen to this channel, and stop scanning';
-      li.append(dot, n, f, x);
+      li.append(dot, n, f, sq, x);
       return li;
     }));
   }
