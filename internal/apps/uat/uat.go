@@ -203,6 +203,7 @@ func (a *App) receive(ctx context.Context, src sdr.Source) error {
 			ac := a.tracker.UpdateReport(track.Report{
 				ICAO:         m.Address,
 				Callsign:     m.Callsign,
+				Squawk:       m.Squawk,
 				HasPosition:  m.HasPosition,
 				Lat:          m.Lat,
 				Lon:          m.Lon,

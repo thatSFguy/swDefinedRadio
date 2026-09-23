@@ -106,6 +106,7 @@ func (t *Tracker) CountFrame() {
 type Report struct {
 	ICAO     uint32
 	Callsign string
+	Squawk   string
 
 	HasPosition bool
 	Lat, Lon    float64
@@ -131,6 +132,9 @@ func (t *Tracker) UpdateReport(r Report, signal float64, at time.Time) Aircraft 
 	ac := t.seen(r.ICAO, signal, at)
 	if r.Callsign != "" {
 		ac.Callsign = r.Callsign
+	}
+	if r.Squawk != "" {
+		ac.Squawk = r.Squawk
 	}
 	if r.HasAltitude {
 		ac.Altitude, ac.HasAltitude = r.Altitude, true

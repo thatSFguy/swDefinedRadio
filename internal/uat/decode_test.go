@@ -88,6 +88,7 @@ func putCallsign(p []byte, emitter byte, cs string) {
 	p[19], p[20] = byte(v>>8), byte(v)
 	v = code(cs[5])*1600 + code(cs[6])*40 + code(cs[7])
 	p[21], p[22] = byte(v>>8), byte(v)
+	p[26] |= 0x02 // CSID: this is a call sign, not a squawk
 }
 
 func TestDecodeStateVector(t *testing.T) {
@@ -244,5 +245,26 @@ func TestCallsignOnlyFromModeStatusTypes(t *testing.T) {
 	p[17], p[18] = 0x01, 0x2c
 	if m, _ := DecodeADSB(p); m.Callsign != "" {
 		t.Errorf("an auxiliary state vector was read as call sign %q", m.Callsign)
+	}
+}
+
+// The call sign field carries the squawk instead when the CSID flag is
+// clear. VFR traffic alternates between the two, and reading both as a
+// call sign named it "1200" every other message.
+func TestSquawkInTheCallsignField(t *testing.T) {
+	p := encodeSV(40.6892, -74.0445, 4500, false, 120, 90, 0)
+	putCallsign(p, 1, "1200")
+	p[26] &^= 0x02 // CSID clear: a squawk
+	m, _ := DecodeADSB(p)
+	if m.Callsign != "" || m.Squawk != "1200" {
+		t.Errorf("callsign %q, squawk %q; want no call sign and squawk 1200", m.Callsign, m.Squawk)
+	}
+
+	// Not four octal digits, so not a squawk either; better nothing
+	// than a wrong code.
+	putCallsign(p, 1, "N123AB")
+	p[26] &^= 0x02
+	if m, _ := DecodeADSB(p); m.Callsign != "" || m.Squawk != "" {
+		t.Errorf("callsign %q, squawk %q; want neither", m.Callsign, m.Squawk)
 	}
 }

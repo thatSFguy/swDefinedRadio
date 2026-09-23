@@ -31,7 +31,8 @@ type Message struct {
 	HasVertical  bool
 
 	Callsign string
-	Emitter  byte // aircraft category
+	Squawk   string // the transponder code, when that is what was sent instead
+	Emitter  byte   // aircraft category
 
 	NIC byte // containment radius category: how much to trust the position
 }
@@ -108,7 +109,17 @@ func DecodeADSB(p []byte) (Message, bool) {
 	// sign, its small numbers come out as "0000000", and the aircraft's
 	// name flickered between that and its real one.
 	if len(p) >= 34 && (m.Type == 1 || m.Type == 3) {
-		m.Emitter, m.Callsign = modeStatus(p)
+		var id string
+		m.Emitter, id = modeStatus(p)
+		// The same eight characters hold either the call sign or the
+		// squawk, and a flag says which. Aircraft without a flight plan
+		// alternate between the two, so ignoring the flag named them
+		// "1200" every other message.
+		if p[26]&0x02 != 0 {
+			m.Callsign = id
+		} else if isSquawk(id) {
+			m.Squawk = id
+		}
 	}
 	return m, true
 }
@@ -173,6 +184,19 @@ func modeStatus(p []byte) (emitter byte, callsign string) {
 		b.WriteByte(base40(v % 40))
 	}
 	return emitter, strings.TrimSpace(b.String())
+}
+
+// isSquawk is four octal digits, which is all a transponder code can be.
+func isSquawk(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '7' {
+			return false
+		}
+	}
+	return true
 }
 
 // base40 is UAT's character set: ten digits, twenty-six letters, then
