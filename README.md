@@ -188,5 +188,13 @@ on 1090 MHz.
 
 ## Licence
 
-None chosen yet — which legally means all rights reserved, so pick one
-before expecting anyone to use this.
+[MIT](LICENSE) — do what you like with it.
+
+The receivers drive `rtl_tcp`, `rtl_sdr` and `rtl_433` as separate
+processes, over a socket and a pipe, which is what the GPL FAQ calls
+communicating at arm's length; they are downloaded from their own
+projects rather than carried here, so none of their code is
+redistributed. [Leaflet](internal/aircraftui/web/vendor/leaflet/LICENSE)
+is vendored under BSD-2-Clause, and the
+[Natural Earth](https://www.naturalearthdata.com) basemap is public
+domain.
