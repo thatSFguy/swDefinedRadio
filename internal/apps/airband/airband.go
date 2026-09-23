@@ -80,6 +80,12 @@ type Config struct {
 	// Dir is where the channel list is kept, so channels added from the
 	// page outlive a restart.
 	Dir string
+
+	// Discover sweeps the band on the first run and adds whatever is
+	// transmitting, which saves looking local frequencies up. It only
+	// happens when there is no saved list, since after that the list is
+	// the user's and a sweep should be something they ask for.
+	Discover bool
 }
 
 // App is a configured airband receiver.
@@ -96,6 +102,16 @@ type App struct {
 	since    time.Time // when the current channel was last busy
 	src      sdr.Source
 	heard    []Heard
+
+	// fresh means no saved channel list was found, so a sweep on the
+	// first run is a help rather than an interruption.
+	fresh    bool
+	sweeping bool
+
+	// tunedAt is when the tuner last moved, and lastBusy when this
+	// channel last carried anything.
+	tunedAt  time.Time
+	lastBusy time.Time
 }
 
 // Heard is a record of a transmission, which is most of the value of
@@ -123,12 +139,14 @@ func New(cfg Config) (*App, error) {
 	if len(a.channels) == 0 {
 		a.channels = slices.Clone(DefaultChannels)
 	}
+	loaded := false
 	if saved, err := a.load(); err == nil && len(saved) > 0 {
-		a.channels = saved
+		a.channels, loaded = saved, true
 	} else if err != nil {
 		log.Printf("airband: channels: %v", err)
 	}
 	a.freq = a.channels[0].Hz
+	a.fresh = !loaded
 	a.am.Squelch = cfg.Squelch
 	a.am.Gain *= cfg.Volume
 	return a, nil
@@ -164,6 +182,7 @@ type State struct {
 	Level    float64   `json:"level"`
 	Squelch  float64   `json:"squelch"`
 	Channels []Channel `json:"channels"`
+	Sweeping bool      `json:"sweeping"`
 	Heard    []Heard   `json:"heard"`
 	OnAir    bool      `json:"on_air"`
 	Rate     int       `json:"audio_rate"`
@@ -172,13 +191,17 @@ type State struct {
 func (a *App) State() State {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	heard := slices.Clone(a.heard)
+	// An empty list, not null: a caller should be able to count it
+	// without checking first.
+	heard := make([]Heard, 0, len(a.heard))
+	heard = append(heard, a.heard...)
 	slices.Reverse(heard)
 	return State{
 		Freq: a.freq, Name: a.nameOfLocked(a.freq),
 		Scanning: a.scanning, Busy: a.busy,
 		Level: a.am.Level(), Squelch: a.am.Squelch,
 		Channels: slices.Clone(a.channels),
+		Sweeping: a.sweeping,
 		Heard:    heard,
 		OnAir:    a.src != nil,
 		Rate:     demod.AudioRate,
@@ -214,16 +237,51 @@ func (a *App) Tune(hz uint32) error {
 }
 
 func (a *App) tuneLocked(hz uint32) error {
+	// Whichever way this goes, the channel being left takes its history
+	// with it: how recently *it* was busy says nothing about the new one,
+	// and carrying the hold across would make every channel wait.
+	a.freq = hz
+	a.since = time.Now()
+	a.tunedAt = a.since
+	a.lastBusy = time.Time{}
+	a.busy = false
+
 	if a.src == nil {
-		a.freq = hz // remembered for when the radio comes back
-		return ErrNotOnAir
+		return ErrNotOnAir // remembered for when the radio comes back
 	}
 	if err := a.src.Tune(hz); err != nil {
 		return fmt.Errorf("tune: %w", err)
 	}
-	a.freq = hz
-	a.since = time.Now()
 	return nil
+}
+
+// Sweep looks for channels now, if the radio is here to do it with.
+func (a *App) Sweep(ctx context.Context) ([]Channel, error) {
+	a.mu.Lock()
+	src, busy := a.src, a.sweeping
+	if src == nil {
+		a.mu.Unlock()
+		return nil, ErrNotOnAir
+	}
+	if busy {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("already sweeping")
+	}
+	a.sweeping, src = true, a.src
+	here := a.freq
+	a.mu.Unlock()
+
+	found, err := a.DiscoverInto(ctx, src)
+
+	a.mu.Lock()
+	a.sweeping = false
+	a.mu.Unlock()
+	// Put the radio back where it was; a sweep leaves it at the top of
+	// the band.
+	if e := src.Tune(here); e != nil && err == nil {
+		err = e
+	}
+	return found, err
 }
 
 // SetScanning starts or stops moving between channels.
@@ -355,11 +413,24 @@ func ParseChannels(s string) ([]Channel, error) {
 	return out, nil
 }
 
-// how long a channel is given to show activity before the scan moves on,
-// and how long a busy channel is held after it goes quiet.
 const (
-	dwell = 400 * time.Millisecond
-	hang  = 2 * time.Second
+	// dwell is how long a channel is given to show activity before the
+	// scan moves on. The squelch decides once per block of about 55 ms,
+	// so this is a couple of decisions — enough to be sure, and short
+	// enough that a list of twenty channels comes round in a few
+	// seconds rather than after the transmission has finished.
+	dwell = 120 * time.Millisecond
+
+	// hang is how long a channel is held after it goes quiet, because
+	// the reply almost always comes back on the same frequency and
+	// moving on between the two halves of an exchange is the single
+	// most annoying thing a scanner can do.
+	hang = 2500 * time.Millisecond
+
+	// settle is how long after retuning to ignore the squelch. Samples
+	// captured before the tuner moved are still arriving, and they
+	// carry the old channel's carrier with them.
+	settle = 60 * time.Millisecond
 )
 
 // Run demodulates until ctx is cancelled, moving between channels while
@@ -386,6 +457,25 @@ func (a *App) Run(ctx context.Context, src sdr.Source) error {
 		return fmt.Errorf("tune: %w", err)
 	}
 	log.Printf("listening on %s", MHz(start))
+
+	// Sweeping needs the radio to itself, so it happens before listening
+	// starts rather than alongside it.
+	if a.cfg.Discover && a.fresh {
+		a.mu.Lock()
+		a.fresh, a.sweeping = false, true
+		a.mu.Unlock()
+		log.Print("sweeping the band for active channels…")
+		if _, err := a.DiscoverInto(ctx, src); err != nil && ctx.Err() == nil {
+			log.Printf("channel sweep: %v", err)
+		}
+		a.mu.Lock()
+		a.sweeping = false
+		next := a.freq
+		a.mu.Unlock()
+		if err := src.Tune(next); err != nil {
+			return fmt.Errorf("tune: %w", err)
+		}
+	}
 
 	if a.cfg.Speaker {
 		if err := audio.Speaker(ctx, a.audio); err != nil {
@@ -419,35 +509,41 @@ func (a *App) step() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	open := a.am.Open()
-	if open != a.busy {
-		if open {
-			a.since = time.Now()
-		} else {
-			// Record what was just heard, which is the point of leaving
-			// a scanner running while you are not in the room.
-			a.recordLocked(time.Since(a.since))
-		}
-		a.busy = open
-		if open {
-			a.since = time.Now()
-		}
-	}
-	if open {
-		a.since = time.Now() // hold the channel while it is busy
+	now := time.Now()
+
+	// Whatever is arriving just after a retune was captured before it,
+	// so it describes the channel just left.
+	if now.Sub(a.tunedAt) < settle {
 		return
+	}
+
+	open := a.am.Open()
+	switch {
+	case open && !a.busy:
+		a.since = now // somebody keyed up
+	case !open && a.busy:
+		// Record what was just heard, which is most of the point of
+		// leaving a scanner running while you are not in the room.
+		a.recordLocked(now.Sub(a.since))
+		a.lastBusy = now
+	}
+	a.busy = open
+
+	if open {
+		return // stay while they are talking
 	}
 	if !a.scanning || len(a.channels) < 2 {
 		return
 	}
 
-	// Give a channel that was busy a moment in case the reply comes on
-	// the same frequency, which it usually does.
+	// A channel that has just been busy is held, because the reply comes
+	// back on the same frequency and moving on between the two halves of
+	// an exchange is the worst thing a scanner can do.
 	wait := dwell
-	if a.busy {
+	if !a.lastBusy.IsZero() && now.Sub(a.lastBusy) < hang {
 		wait = hang
 	}
-	if time.Since(a.since) < wait {
+	if now.Sub(a.since) < wait {
 		return
 	}
 

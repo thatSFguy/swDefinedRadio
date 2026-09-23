@@ -110,6 +110,21 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 		web.WriteJSON(w, a.State())
 	})
 
+	// Sweeping needs the radio, so it is a request that can be refused
+	// for a reason that is nobody's fault.
+	mux.HandleFunc("POST /api/sweep", func(w http.ResponseWriter, r *http.Request) {
+		found, err := a.Sweep(r.Context())
+		switch {
+		case errors.Is(err, ErrNotOnAir):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		web.WriteJSON(w, map[string]any{"found": found, "state": a.State()})
+	})
+
 	mux.HandleFunc("POST /api/channels", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Channels []Channel `json:"channels"`

@@ -66,6 +66,7 @@ func Hub(args []string) {
 		airChans = fs.String("airband", "", "airband channels, e.g. \"Tower:118.3,Ground:121.9\"; the saved list is used when empty")
 		airSq    = fs.Float64("airband-squelch", 0.06, "carrier level an airband channel must reach to count as busy")
 		airDir   = fs.String("airband-data", "data/airband", "directory for the airband channel list")
+		airFind  = fs.Bool("airband-discover", true, "on the first run, sweep the airband and add whatever is transmitting")
 		scanFrom = fs.String("scan-start", "88M", "start of the spectrum sweep")
 		scanTo   = fs.String("scan-stop", "1090M", "end of the spectrum sweep")
 
@@ -181,7 +182,7 @@ func Hub(args []string) {
 	}
 	airApp, err := airband.New(airband.Config{
 		Channels: airChannels, Gain: *gain, PPM: *ppm, Device: *device,
-		Squelch: *airSq, Volume: 1, Dir: *airDir,
+		Squelch: *airSq, Volume: 1, Dir: *airDir, Discover: *airFind,
 	})
 	if err != nil {
 		log.Fatalf("airband: %v", err)

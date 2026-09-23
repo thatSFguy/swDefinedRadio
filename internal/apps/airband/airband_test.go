@@ -3,6 +3,7 @@ package airband
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func testApp(t *testing.T, ch ...Channel) *App {
@@ -156,5 +157,48 @@ func TestSquelchCannotGoNegative(t *testing.T) {
 	a.SetSquelch(-1)
 	if got := a.State().Squelch; got != 0 {
 		t.Errorf("squelch = %v, want 0", got)
+	}
+}
+
+// The scan timing is the difference between a scanner that catches an
+// exchange and one that keeps wandering off mid-sentence, so the
+// constants are worth stating rather than leaving to be discovered.
+func TestScanTimingIsUsable(t *testing.T) {
+	// A transmission is a couple of seconds; a pass over a realistic
+	// list has to be quicker than that or most of them are missed.
+	const channels = 20
+	if pass := time.Duration(channels) * dwell; pass > 3*time.Second {
+		t.Errorf("a pass over %d channels takes %v, which is longer than most transmissions",
+			channels, pass)
+	}
+	// The squelch decides about every 55 ms, so a channel must be given
+	// more than one look.
+	if dwell < 100*time.Millisecond {
+		t.Errorf("dwell of %v is less than two squelch decisions", dwell)
+	}
+	// The reply comes back on the same frequency, and it comes back
+	// within a second or two.
+	if hang < 2*time.Second {
+		t.Errorf("hang of %v is too short to catch a reply", hang)
+	}
+	if settle >= dwell {
+		t.Errorf("settle %v swallows the whole dwell %v", settle, dwell)
+	}
+}
+
+// Moving to a channel must not carry the previous one's history with
+// it, or every channel inherits the last one's hang and the scan crawls.
+func TestTuningClearsTheHoldFromTheLastChannel(t *testing.T) {
+	a := testApp(t, Channel{"A", 118_100_000}, Channel{"B", 118_200_000})
+	a.mu.Lock()
+	a.lastBusy = time.Now()
+	a.mu.Unlock()
+
+	_ = a.Tune(118_200_000)
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.lastBusy.IsZero() {
+		t.Error("the new channel inherited the old one's activity")
 	}
 }

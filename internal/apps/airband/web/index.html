@@ -111,6 +111,10 @@
     <input type="text" class="hz" id="chz" placeholder="118.30">
     <button id="cadd">Add</button>
   </div>
+  <div class="row">
+    <button id="sweep">Find channels</button>
+    <span class="sq" id="sweepnote">sweeps the band and adds whatever is transmitting</span>
+  </div>
   <div class="err" id="cerr"></div>
 </div>
 
@@ -168,6 +172,23 @@ $('squelch').onchange = async () => {
   if (d) { state = d; draw(); }
 };
 
+$('sweep').onclick = async () => {
+  $('sweep').disabled = true;
+  $('sweepnote').textContent = 'sweeping…';
+  const d = await post('/api/sweep', {});
+  if (d) {
+    state = d.state;
+    const n = (d.found || []).length;
+    $('sweepnote').textContent = n
+      ? 'added ' + d.found.map(c => c.name).join(', ')
+      : 'nothing new — channels are quiet unless somebody is talking';
+    draw();
+  } else {
+    $('sweepnote').textContent = 'sweeps the band and adds whatever is transmitting';
+  }
+  $('sweep').disabled = false;
+};
+
 $('cadd').onclick = addChannel;
 $('chz').onkeydown = e => { if (e.key === 'Enter') addChannel(); };
 $('cname').onkeydown = e => { if (e.key === 'Enter') $('chz').focus(); };
@@ -214,6 +235,8 @@ function draw() {
   else { st.textContent = 'quiet'; st.className = 'idle'; }
 
   $('scan').className = state.scanning ? 'on' : '';
+  $('sweep').disabled = state.sweeping || !state.on_air;
+  if (state.sweeping) $('sweepnote').textContent = 'sweeping…';
   $('listen').textContent = playing ? '■ Stop' : '▶ Listen';
   $('listen').className = playing ? '' : 'go';
   if (document.activeElement !== $('squelch')) {

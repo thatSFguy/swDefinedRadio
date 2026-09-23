@@ -30,6 +30,7 @@ func Airband(args []string) {
 		addr    = fs.String("http", config.DefaultHTTPAddr, "address for the player and JSON API")
 		volume  = fs.Float64("volume", 1.0, "output gain multiplier")
 		dir     = fs.String("data", "data/airband", "directory for the channel list")
+		find    = fs.Bool("discover", true, "on the first run, sweep the band and add whatever is transmitting")
 		speaker = fs.Bool("speaker", false, "also play through this machine's audio device")
 	)
 	fs.Parse(args)
@@ -47,6 +48,7 @@ func Airband(args []string) {
 	app, err := airband.New(airband.Config{
 		Channels: channels, Gain: *gain, PPM: *ppm, Device: *device,
 		Squelch: *squelch, Volume: *volume, Speaker: *speaker, Dir: *dir,
+		Discover: *find,
 	})
 	if err != nil {
 		log.Fatalf("%v", err)

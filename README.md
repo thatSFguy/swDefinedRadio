@@ -25,7 +25,7 @@ third-party module — so `go build` works with nothing but the toolchain.
 | 🛩️ **UAT** | 978 MHz | The other half of ADS-B in the US, plus ground stations |
 | 🚗 **Tires** | 315 / 433 MHz | Tire-pressure sensors, clustered into vehicles as they pass |
 | 📡 **Spectrum** | 24 – 1766 MHz | Sweep, waterfall, and what each signal probably is |
-| 🗼 **Airband** | 118 – 137 MHz | Aircraft voice: scans channels, stops on whoever is talking |
+| 🗼 **Airband** | 118 – 137 MHz | Aircraft voice: finds its own channels, scans, stops on whoever is talking |
 | 📻 **FM** | 87.5 – 108 MHz | Broadcast radio, streamed to the browser |
 
 ## Try it
