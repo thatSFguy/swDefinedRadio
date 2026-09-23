@@ -79,6 +79,8 @@
 
   .cand li { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:7px;
              border:1px solid transparent; }
+  .cand li { cursor:pointer; }
+  .cand li:hover { background:#1c2230; }
   .cand li.on { border-color:var(--accent); background:#161b22; }
   .cand li.busy { border-color:var(--ok); background:#12211a; }
   .cand .f { font-variant-numeric:tabular-nums; min-width:76px; }
@@ -126,9 +128,9 @@
 <div class="card" id="foundcard" hidden>
   <h1>Heard while surveying</h1>
   <p class="note">
-    Listening to one pauses the survey and turns the audio on. If there is
-    speech, keep it; if there is hiss, discard it. Resume the survey
-    afterwards — it carries on from where it stopped.
+    Click one to listen to it — that pauses the survey and turns the audio
+    on. If there is speech, name it and keep it; if there is hiss, discard
+    it. Resume the survey afterwards; it carries on from where it stopped.
   </p>
   <ul class="cand" id="candidates"></ul>
 </div>
@@ -184,8 +186,8 @@ $('listen').onclick = () => {
     a.pause(); a.removeAttribute('src'); a.load();
     playing = false;
   } else {
-    // The query string defeats the cache: without it a second Listen
-    // replays the connection that has already ended.
+    // The query string defeats the cache: without it, turning the audio
+    // on again replays the connection that has already ended.
     a.src = '/audio.wav?t=' + Date.now();
     a.play().catch(e => { $('cerr').textContent = 'audio: ' + e.message; });
     playing = true;
@@ -267,15 +269,13 @@ function candidateRow(c) {
   f.className = 'f';
   f.textContent = mhz(c.hz);
 
-  const listen = document.createElement('button');
-  listen.textContent = here ? '● listening' : 'Listen';
-  listen.title = 'tune here, pause the survey, and turn the audio on';
-  listen.disabled = here;
-  listen.onclick = () => tune(c.hz, true);
+  const dot = document.createElement('span');
+  dot.className = 'dot' + (here && state.busy ? ' on' : '');
 
   const name = document.createElement('input');
   name.type = 'text';
   name.placeholder = 'name it, e.g. Tower';
+  name.onclick = e => e.stopPropagation();
   name.onfocus = () => { editing = true; };
   name.onblur = () => { editing = false; };
   name.onkeydown = e => { if (e.key === 'Enter') keep(c.hz, name.value); };
@@ -283,19 +283,24 @@ function candidateRow(c) {
   const k = document.createElement('button');
   k.className = 'keep'; k.textContent = 'Keep';
   k.title = 'add this to the channel list';
-  k.onclick = () => keep(c.hz, name.value);
+  k.onclick = e => { e.stopPropagation(); keep(c.hz, name.value); };
 
   const x = document.createElement('button');
   x.className = 'drop'; x.textContent = 'Discard';
-  x.onclick = () => dismiss(c.hz);
+  x.onclick = e => { e.stopPropagation(); dismiss(c.hz); };
 
-  li.append(f, listen, name, k, x);
+  // Selecting the row is how you listen to it, the same as a channel.
+  li.onclick = () => tune(c.hz, true);
+  li.title = 'listen to this — pauses the survey and turns the audio on';
+  li.style.cursor = 'pointer';
+
+  li.append(dot, f, name, k, x);
   return li;
 }
 
-// Tuning somewhere in order to hear it should turn the audio on. Having
-// to press a second button in another panel, one that also says Listen
-// and means something else, is one click too many for one intention.
+// Choosing something to listen to should turn the audio on. Having to
+// press a second button in another panel to find out whether there is
+// anything there is one click too many for a single intention.
 function audioOn() {
   if (playing) return;
   const a = $('audio');
@@ -305,9 +310,12 @@ function audioOn() {
 }
 
 async function tune(hz, listen) {
+  // Start the audio first, while the click is still counted as a user
+  // gesture. After awaiting the fetch the browser may refuse to play,
+  // silently, which looks exactly like a receiver that is not working.
+  if (listen) audioOn();
   const d = await post('/api/tune', { freq_hz: hz });
   if (d) { state = d; draw(); }
-  if (listen) audioOn();
 }
 
 function draw() {
@@ -372,6 +380,7 @@ function draw() {
       sq.placeholder = 'auto';
       sq.title = 'squelch just for this channel; blank uses the receiver\'s';
       sq.onclick = e => e.stopPropagation();
+      sq.onmousedown = e => e.stopPropagation();
       sq.onfocus = () => { editing = true; };
       sq.onblur = async () => {
         editing = false;
@@ -384,8 +393,8 @@ function draw() {
       const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
       x.title = 'remove this channel';
       x.onclick = e => { e.stopPropagation(); removeChannel(c.hz); };
-      li.onclick = () => tune(c.hz);
-      li.title = 'listen to this channel, and stop scanning';
+      li.onclick = () => tune(c.hz, true);
+      li.title = 'listen to this channel — stops scanning and turns the audio on';
       li.append(dot, n, f, sq, x);
       return li;
     }));

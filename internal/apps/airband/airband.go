@@ -220,8 +220,10 @@ func (a *App) State() State {
 		Freq: a.freq, Name: a.nameOfLocked(a.freq),
 		Scanning: a.scanning, Busy: a.busy,
 		Level: a.am.Level(), Squelch: a.am.Squelch,
-		Channels:   slices.Clone(a.channels),
-		Candidates: slices.Clone(a.candidates),
+		Channels: slices.Clone(a.channels),
+		// An empty list, not null, so a page can count it without
+		// checking first.
+		Candidates: append(make([]Channel, 0, len(a.candidates)), a.candidates...),
 		Sweeping:   a.sweeping,
 		Survey:     a.surveyProgressLocked(),
 		Heard:    heard,
