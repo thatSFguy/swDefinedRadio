@@ -911,6 +911,27 @@ Recovered audio is divided by the carrier, so a distant aircraft is as
 loud as a close one — what you hear is modulation depth, not how
 strongly the signal arrived.
 
+### Recording
+
+**Record** keeps each transmission as a clip of its own, cut where the
+squelch opens and closes. A channel is silent most of the time, so one
+long recording would be mostly nothing; the clips are the part worth
+keeping. Bursts too short to log — a click of static — are not kept,
+and a transmission cut short by moving to another channel is.
+
+Clips from one press of **Record** form a session, which ends when
+Record is turned off or the tab gives up the radio. On the page a
+session is one row: its ▶ plays the clips in the order they were heard,
+each running into the next, so an afternoon of traffic can be listened
+to like the stream it was. Open the row to play, download or delete a
+single clip, or tick rows to delete many at once. Clips in the Heard
+log have their own ▶, which plays from that clip to the end of its
+session.
+
+Clips are 48 kHz 16-bit mono WAV under `data/airband/recordings/`, one
+directory per session. Nothing is deleted automatically; the total they
+use is shown at the bottom of the list.
+
 ## fm
 
 Receives one broadcast FM station and plays it, in the browser or
@@ -958,12 +979,22 @@ Get `-deemph` wrong and nothing fails, it just sounds off: `us` where
 | `-freq` | `98.7M` | Station; a bare number under 200 is read as MHz |
 | `-deemph` | `us` | `us` (75 µs) or `eu` (50 µs) |
 | `-speaker` | off | Also play through this machine's audio device |
+| `-data` | `data/fm` | Where recordings are kept, under `recordings/` |
 | `-volume` | `1.0` | Output gain multiplier |
 | `-gain` | `-1` | Tuner gain in dB, or `-1` for automatic |
 | `-ppm`, `-device`, `-rtltcp`, `-http` | | Tuner and server settings |
 
 A frequency outside 87.5-108 MHz is rejected before the tuner is asked
 for it, which catches `987` typed for `98.7`.
+
+### Recording
+
+**Record** writes what is being received to a WAV file on the machine
+running the receiver — not in the browser, so it carries on with the
+page closed. A take runs until **Stop**, carries on through retuning, and
+ends if the tab gives up the radio. Takes are 48 kHz 16-bit mono, about
+350 MB an hour, under `data/fm/recordings/` (`-fm-data` in the tabbed
+app), and the page plays, downloads and deletes them.
 
 ### Speakers, and speakers under WSL
 

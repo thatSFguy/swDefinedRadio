@@ -2,9 +2,9 @@
 
 # swDefinedRadio
 
-**Five radio receivers, one dongle, one binary.**
+**Six radio receivers, one dongle, one binary.**
 
-Aircraft · tire sensors · spectrum · broadcast FM — in a browser, with tabs.
+Aircraft · aircraft voice · tire sensors · spectrum · broadcast FM — in a browser, with tabs.
 
 [![ci](https://github.com/thatSFguy/swDefinedRadio/actions/workflows/ci.yml/badge.svg)](https://github.com/thatSFguy/swDefinedRadio/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/thatSFguy/swDefinedRadio?color=blue)](https://github.com/thatSFguy/swDefinedRadio/releases)
@@ -25,8 +25,19 @@ third-party module — so `go build` works with nothing but the toolchain.
 | 🛩️ **UAT** | 978 MHz | The other half of ADS-B in the US, plus ground stations |
 | 🚗 **Tires** | 315 / 433 MHz | Tire-pressure sensors, clustered into vehicles as they pass |
 | 📡 **Spectrum** | 24 – 1766 MHz | Sweep, waterfall, and what each signal probably is |
-| 🗼 **Airband** | 118 – 137 MHz | Aircraft voice: finds its own channels, scans, stops on whoever is talking |
-| 📻 **FM** | 87.5 – 108 MHz | Broadcast radio, streamed to the browser |
+| 🗼 **Airband** | 118 – 137 MHz | Aircraft voice: finds its own channels, scans, stops on whoever is talking, records each transmission |
+| 📻 **FM** | 87.5 – 108 MHz | Broadcast radio, streamed to the browser, and recorded when you ask |
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/aircraft.png" alt="The aircraft tab: a map of Lake Michigan and west Michigan with three aircraft labelled by flight and altitude, beside a table of flights"><br><sub><b>Aircraft</b> — live map and table, from 1090 MHz ADS-B</sub></td>
+<td width="50%"><img src="docs/screenshots/spectrum.png" alt="The spectrum tab: a sweep from 88 MHz to 1.09 GHz above a waterfall, with a list of the strongest signals and what each probably is"><br><sub><b>Spectrum</b> — sweep, waterfall, and what each signal probably is</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/airband.png" alt="The airband tab: tuned to Chicago Center on 133.200 MHz, with a signal meter and squelch mark, a list of saved channels, and a Recordings tab holding two sessions of clips"><br><sub><b>Airband</b> — scan channels, set the squelch on the meter, keep every transmission</sub></td>
+<td width="50%"><img src="docs/screenshots/fm.png" alt="The FM tab: tuned to 98.7 MHz with a signal meter, Listen and Record buttons, a volume slider, and buttons for the stations found locally"><br><sub><b>FM</b> — listen in the browser, record a take</sub></td>
+</tr>
+</table>
 
 ## Try it
 
@@ -40,7 +51,7 @@ Then open **<http://localhost:9999>** and pick a tab.
 Or take a [release binary](https://github.com/thatSFguy/swDefinedRadio/releases)
 — one file per platform, nothing to unpack.
 
-## One radio, five receivers
+## One radio, six receivers
 
 There is one tuner and one converter, and the receivers want incompatible
 settings: ADS-B needs exactly 2 Msps because its slicer assumes two
@@ -56,6 +67,23 @@ survives being switched away from. Leave the aircraft tab for ten minutes
 and the table is still there when you come back — ageing honestly, since
 an aircraft last heard four minutes ago has gone whether or not anyone
 was listening.
+
+## Recording
+
+The two receivers with sound can keep it. Recording happens in the
+process, not the browser, so it carries on with the page closed.
+
+* **Airband** keeps a clip per transmission, cut where the squelch opens
+  and closes, and gathers the clips from one press of **Record** into a
+  session. A session is one row that plays as a whole — each clip, then
+  the next — and opens to show the clips inside it.
+* **FM** records one take per press, for as long as you leave it.
+
+Recordings are ordinary WAV files (48 kHz, 16-bit mono) under
+`data/airband/recordings/` and `data/fm/recordings/`. The page plays,
+downloads and deletes them, singly or by the session, and says how much
+disk they use — clips left running pile up. A recording cut short by a
+crash is repaired the next time the receiver starts.
 
 ## Commands
 
@@ -187,12 +215,12 @@ cmd/sdr            one binary, every receiver
 internal/
   hub/             the tab bar, and which receiver has the radio
   radio/           owns the dongle; hands it over without restarting it
-  apps/            the five receivers, each with its own page
+  apps/            the six receivers, each with its own page
   sdr/             IQ sources — an rtl_sdr pipe, or an rtl_tcp client
   modes/ uat/      Mode S and UAT demodulation and decoding
   track/           CPR position recovery and the aircraft table
   scan/ dsp/       sweeping, FFT, windows, peak detection
-  demod/ audio/    FM demodulation, and fanning sound out to listeners
+  demod/ audio/    FM and AM demodulation; fanning sound out, and recording it
 ```
 
 Receivers say what they need of the radio and never how to arrange it.
