@@ -132,8 +132,10 @@ running_pid() {
 needs_build() {
   local name="$1"
   [ -x "$bin/$name" ] || return 0
-  [ -n "$(find cmd internal -type f \( -name '*.go' -o -name '*.html' \) \
-            -newer "$bin/$name" -print -quit 2>/dev/null)" ]
+  # Any file, not just Go and HTML: pages, scripts, styles and the
+  # basemap are all compiled in with go:embed, and a changed script that
+  # did not trigger a rebuild went on being served in its old form.
+  [ -n "$(find cmd internal go.mod -type f -newer "$bin/$name" -print -quit 2>/dev/null)" ]
 }
 
 # cross_build compiles every tool for another platform, into dist/<os>/.
