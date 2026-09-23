@@ -161,6 +161,37 @@ func (a *App) Handler(ctx context.Context) (http.Handler, error) {
 		web.WriteJSON(w, a.State())
 	})
 
+	// Keeping a candidate is a separate act from finding it, because the
+	// test a survey cannot do — is there speech on it — happens in
+	// between, and only somebody listening can apply it.
+	mux.HandleFunc("POST /api/keep", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			FreqHz float64 `json:"freq_hz"`
+			Name   string  `json:"name"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := a.Keep(uint32(req.FreqHz), req.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		web.WriteJSON(w, a.State())
+	})
+
+	mux.HandleFunc("POST /api/dismiss", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			FreqHz float64 `json:"freq_hz"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		a.Dismiss(uint32(req.FreqHz))
+		web.WriteJSON(w, a.State())
+	})
+
 	mux.HandleFunc("POST /api/channels", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Channels []Channel `json:"channels"`
