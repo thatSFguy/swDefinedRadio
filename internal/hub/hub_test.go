@@ -28,7 +28,7 @@ type fakeApp struct {
 	blockStop time.Duration
 }
 
-func (f *fakeApp) Meta() Meta      { return f.meta }
+func (f *fakeApp) Meta() Meta       { return f.meta }
 func (f *fakeApp) Need() radio.Need { return radio.Need{Mode: radio.Samples} }
 
 func (f *fakeApp) Handler(context.Context) (http.Handler, error) {
@@ -70,15 +70,15 @@ func testHub(t *testing.T, apps ...App) *Hub {
 }
 
 func twoAircraft() (*fakeApp, *fakeApp) {
-	return &fakeApp{meta: Meta{"adsb", "Aircraft", "1090 MHz"}},
-		&fakeApp{meta: Meta{"uat", "UAT", "978 MHz"}}
+	return &fakeApp{meta: Meta{ID: "adsb", Title: "Aircraft", Band: "1090 MHz"}},
+		&fakeApp{meta: Meta{ID: "uat", Title: "UAT", Band: "978 MHz"}}
 }
 
 // Two receivers cannot both be called the same thing, or a tab would be
 // unreachable and a request ambiguous.
 func TestDuplicateIDsRefused(t *testing.T) {
 	a, _ := twoAircraft()
-	b := &fakeApp{meta: Meta{"adsb", "Other", "x"}}
+	b := &fakeApp{meta: Meta{ID: "adsb", Title: "Other", Band: "x"}}
 	ctx := context.Background()
 	if _, err := New(ctx, &fakeRadio{}, []App{a, b}); err == nil {
 		t.Fatal("two receivers with the same id were accepted")
@@ -251,7 +251,7 @@ func TestStopLeavesTheHubRunning(t *testing.T) {
 // A receiver that will not let go must not wedge the hub. It is a bug
 // worth complaining about, not one worth hanging over.
 func TestAStuckReceiverDoesNotWedgeTheHub(t *testing.T) {
-	slow := &fakeApp{meta: Meta{"slow", "Slow", "x"}, blockStop: 5 * time.Second}
+	slow := &fakeApp{meta: Meta{ID: "slow", Title: "Slow", Band: "x"}, blockStop: 5 * time.Second}
 	_, u := twoAircraft()
 	h := testHub(t, slow, u)
 
@@ -302,7 +302,7 @@ func TestStateEndpoint(t *testing.T) {
 // The shell polls for progress while a switch is happening, so asking
 // must not wait for the switch it is asking about.
 func TestStateAnswersDuringASwitch(t *testing.T) {
-	slow := &fakeApp{meta: Meta{"slow", "Slow", "x"}, blockStop: 2 * time.Second}
+	slow := &fakeApp{meta: Meta{ID: "slow", Title: "Slow", Band: "x"}, blockStop: 2 * time.Second}
 	_, u := twoAircraft()
 	h := testHub(t, slow, u)
 
@@ -370,7 +370,7 @@ func (f *fakeRadio) Acquire(context.Context, radio.Need) (radio.Handle, error) {
 	return radio.Handle{}, nil
 }
 
-func (f *fakeRadio) Release()          { f.releases.Add(1) }
+func (f *fakeRadio) Release()           { f.releases.Add(1) }
 func (f *fakeRadio) State() radio.State { return radio.State{Running: true} }
 
 // A radio that cannot be arranged leaves the hub saying so rather than

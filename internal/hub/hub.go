@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net/http"
+	"math"
+	"strconv"
 	"strings"
+	"net/http"
 	"sync"
 	"time"
 
@@ -37,6 +39,56 @@ type Meta struct {
 	ID    string `json:"id"`    // "adsb" — the URL segment
 	Title string `json:"title"` // "Aircraft" — what the tab says
 	Band  string `json:"band"`  // "1090 MHz"
+
+	// Antenna is a quarter wavelength for this band, which is what the
+	// telescopic whip most of these dongles ship with should be set to.
+	// It is the cheapest few dB available and nothing otherwise says so:
+	// the whip is adjustable, and left at whatever length it was last
+	// used at it is wrong for every band but one.
+	Antenna string `json:"antenna,omitempty"`
+}
+
+// QuarterWave is a quarter of a wavelength in centimetres.
+//
+// A wave is 300/f metres with f in megahertz, so a quarter of one is
+// 7500/f centimetres.
+func QuarterWave(hz uint32) float64 {
+	if hz == 0 {
+		return 0
+	}
+	return 7500 / (float64(hz) / 1e6)
+}
+
+// cm renders a length with as much precision as it deserves. A tenth of
+// a centimetre is a twentieth of the whole thing at 1090 MHz and nothing
+// at all at 100, so short lengths get a decimal and long ones do not.
+func cm(v float64) string {
+	if v < 20 {
+		return strconv.FormatFloat(v, 'f', 1, 64)
+	}
+	return strconv.Itoa(int(math.Round(v)))
+}
+
+// antennaAt renders the quarter wave for each of several separate
+// frequencies, for a receiver that listens on two places rather than
+// across a band — where a range would read as though everything between
+// them mattered, and backwards at that.
+func antennaAt(hz ...uint32) string {
+	parts := make([]string, 0, len(hz))
+	for _, f := range hz {
+		parts = append(parts, fmt.Sprintf("%s cm at %g MHz", cm(QuarterWave(f)), float64(f)/1e6))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// antennaFor renders the quarter wave for a band, which is a range when
+// the band is wide enough for the ends to differ.
+func antennaFor(lowHz, highHz uint32) string {
+	lo, hi := QuarterWave(highHz), QuarterWave(lowHz) // shorter at the top
+	if cm(lo) == cm(hi) {
+		return cm(lo) + " cm"
+	}
+	return cm(lo) + "–" + cm(hi) + " cm"
 }
 
 // App is one tab.

@@ -53,6 +53,8 @@
   .spacer { flex:1; }
   .status { color:var(--dim); font-size:11px; padding:0 4px; white-space:nowrap; }
   .status b { color:var(--fg); font-variant-numeric:tabular-nums; }
+  #antenna { color:var(--dim); }
+  #antenna b { color:var(--ok); }
   .stop {
     background:#21262d; color:var(--dim); border:1px solid var(--line);
     border-radius:6px; font:inherit; font-size:11px; padding:4px 10px;
@@ -90,6 +92,7 @@
   <span class="brand">SDR</span>
   <nav id="tabs"></nav>
   <span class="spacer"></span>
+  <span class="status" id="antenna"></span>
   <span class="status" id="radio"></span>
   <button class="stop" id="stop" disabled>release radio</button>
 </header>
@@ -111,6 +114,7 @@ const $frame = document.getElementById('frame');
 const $idle = document.getElementById('idle');
 const $banner = document.getElementById('banner');
 const $radio = document.getElementById('radio');
+const $antenna = document.getElementById('antenna');
 const $stop = document.getElementById('stop');
 
 let tabs = [];          // what the hub offers
@@ -208,6 +212,14 @@ function render(st) {
   // A receiver that drives its own subprocess sets the rate itself, so
   // the hub does not know it — but the radio is being used, and saying
   // "idle" while a receiver is decoding is simply wrong.
+  // Most of these dongles ship with a telescopic whip, and it is
+  // adjustable — so saying what this band wants is worth more than any
+  // amount of tuning done in software.
+  const on = tabs.find(t => t.id === active);
+  $antenna.innerHTML = (on && on.antenna && phase === 'on_air')
+    ? 'antenna ¼λ <b>' + on.antenna + '</b>'
+    : '';
+
   const rate = r.sample_rate;
   const state = rate ? (rate / 1e6).toFixed(3) + ' Msps' : (r.held ? 'in use' : 'idle');
   $radio.innerHTML = r.running ? 'radio <b>' + state + '</b>' : 'radio <b>stopped</b>';

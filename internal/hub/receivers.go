@@ -23,7 +23,9 @@ import (
 
 type adsbTab struct{ app *adsb.App }
 
-func (t adsbTab) Meta() Meta { return Meta{"adsb", "Aircraft", "1090 MHz"} }
+func (t adsbTab) Meta() Meta {
+	return Meta{ID: "adsb", Title: "Aircraft", Band: "1090 MHz", Antenna: antennaFor(1_090_000_000, 1_090_000_000)}
+}
 
 func (t adsbTab) Need() radio.Need {
 	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
@@ -44,7 +46,9 @@ func (t adsbTab) Background(ctx context.Context) { t.app.Expire(ctx) }
 
 type uatTab struct{ app *uat.App }
 
-func (t uatTab) Meta() Meta { return Meta{"uat", "UAT", "978 MHz"} }
+func (t uatTab) Meta() Meta {
+	return Meta{ID: "uat", Title: "UAT", Band: "978 MHz", Antenna: antennaFor(978_000_000, 978_000_000)}
+}
 
 func (t uatTab) Need() radio.Need {
 	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
@@ -66,7 +70,10 @@ type tpmsTab struct {
 	mode radio.Mode
 }
 
-func (t *tpmsTab) Meta() Meta { return Meta{"tpms", "Tires", "315 / 433 MHz"} }
+func (t *tpmsTab) Meta() Meta {
+	return Meta{ID: "tpms", Title: "Tires", Band: "315 / 433 MHz",
+		Antenna: antennaAt(315_000_000, 433_920_000)}
+}
 
 // Need asks for an address rather than samples: rtl_433 knows the sensor
 // protocols and opens its own connection to the radio, so what this
@@ -89,7 +96,10 @@ func (t *tpmsTab) Background(ctx context.Context) { t.app.Autosave(ctx) }
 
 type scannerTab struct{ app *scanner.App }
 
-func (t scannerTab) Meta() Meta { return Meta{"scanner", "Spectrum", "sweep"} }
+// A sweeper has no one band, so there is no one right length.
+func (t scannerTab) Meta() Meta {
+	return Meta{ID: "scanner", Title: "Spectrum", Band: "sweep"}
+}
 
 func (t scannerTab) Need() radio.Need {
 	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
@@ -106,7 +116,9 @@ func (t scannerTab) Run(ctx context.Context, h radio.Handle) error {
 
 type airbandTab struct{ app *airband.App }
 
-func (t airbandTab) Meta() Meta { return Meta{"airband", "Airband", "118–137 MHz"} }
+func (t airbandTab) Meta() Meta {
+	return Meta{ID: "airband", Title: "Airband", Band: "118–137 MHz", Antenna: antennaFor(118_000_000, 137_000_000)}
+}
 
 func (t airbandTab) Need() radio.Need {
 	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
@@ -124,7 +136,9 @@ func (t airbandTab) Run(ctx context.Context, h radio.Handle) error {
 
 type fmTab struct{ app *fm.App }
 
-func (t fmTab) Meta() Meta { return Meta{"fm", "FM", "87.5–108 MHz"} }
+func (t fmTab) Meta() Meta {
+	return Meta{ID: "fm", Title: "FM", Band: "87.5–108 MHz", Antenna: antennaFor(87_500_000, 108_000_000)}
+}
 
 func (t fmTab) Need() radio.Need {
 	return radio.Need{Mode: radio.Samples, Tune: t.app.Radio()}
