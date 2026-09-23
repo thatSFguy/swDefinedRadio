@@ -20,6 +20,17 @@
     font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
   }
   #map { flex: 1; min-width: 0; background: var(--sea); }
+  .legend {
+    background: rgba(13, 17, 23, .82); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; color: var(--dim);
+    font-size: 10px; line-height: 1.5; backdrop-filter: blur(3px);
+  }
+  .legend h4 { margin: 0 0 4px; font-size: 10px; font-weight: 600; color: var(--dim);
+               text-transform: uppercase; letter-spacing: .5px; }
+  .legend .row { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; flex: none;
+              border: 1px solid #0d1117; }
+  .legend .v { font-variant-numeric: tabular-nums; }
   .leaflet-container { background: var(--sea); }
   /* Street tiles are drawn for a white page; invert them so they sit
      next to a dark panel. The stored map is already dark and is left
@@ -315,6 +326,7 @@ function addSelector(opts) {
     });
   }
   L.control.layers(bases, null, { position: 'topleft' }).addTo(map);
+  addLegend();
 
   // Remember the choice, so a preference survives a reload. ?map=
   // overrides it, which makes the choice bookmarkable.
@@ -346,6 +358,29 @@ function colour(alt) {
   let c = BANDS[0][1];
   for (const [floor, col] of BANDS) if (alt >= floor) c = col;
   return c;
+}
+
+// Built from BANDS above rather than written out separately: a legend
+// that can disagree with the thing it describes is worse than none.
+function addLegend() {
+  const box = L.control({ position: 'bottomleft' });
+  box.onAdd = () => {
+    const d = L.DomUtil.create('div', 'legend');
+    const rows = BANDS.map(([floor, col], i) => {
+      const next = BANDS[i + 1];
+      const range = next
+        ? `${floor / 1000}–${next[0] / 1000}`
+        : `${floor / 1000}+`;
+      return `<div class="row"><i style="background:${col}"></i>
+                <span class="v">${range}</span></div>`;
+    });
+    rows.push(`<div class="row"><i style="background:${colour(null)}"></i>
+                 <span>no altitude</span></div>`);
+    d.innerHTML = `<h4>Altitude, ×1000 ft</h4>${rows.reverse().join('')}`;
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  };
+  box.addTo(map);
 }
 
 function icon(a) {
