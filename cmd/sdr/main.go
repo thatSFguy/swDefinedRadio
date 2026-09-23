@@ -11,4 +11,10 @@ import (
 	"github.com/thatSFguy/swDefinedRadio/internal/cli"
 )
 
-func main() { os.Exit(cli.Main(os.Args[1:])) }
+func main() {
+	code := cli.Main(os.Args[1:])
+	// Double-clicked from Explorer, the console belongs to this process
+	// and closes with it, so anything just printed is never read.
+	cli.PauseAtExit()
+	os.Exit(code)
+}

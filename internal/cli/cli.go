@@ -67,6 +67,12 @@ func Main(args []string) int {
 	}
 	for _, c := range Commands {
 		if c.Name == name {
+			// Only the receivers need the radio, so only they are worth
+			// stopping to set up for. install, version and the rest work
+			// on a machine with nothing on it.
+			if !OfferInstall() {
+				return 1
+			}
 			c.Run(rest)
 			return 0
 		}

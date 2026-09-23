@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/zip"
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // Installing on Windows means four things, and only the first is about
@@ -24,45 +27,13 @@ import (
 // ask for elevation is the driver, which is Zadig's business rather than
 // ours.
 
-// The upstream projects. Their Windows builds are downloaded rather than
-// carried in this repository: they are somebody else's work under their
-// own licence, and pinning a copy here would mean shipping it stale.
-const (
-	rtlsdrRepo = "rtlsdrblog/rtl-sdr-blog"
-	rtl433Repo = "merbanan/rtl_433"
-)
-
-// want names a file inside an archive and what to call it once installed.
-type want struct{ from, to string }
-
-// wanted lists what is taken out of each archive. Everything else in them
-// — import libraries, the other rtl_* tools — is not needed to run this.
-var (
-	rtlsdrWanted = []want{
-		{"rtl_tcp.exe", "rtl_tcp.exe"},
-		{"rtl_sdr.exe", "rtl_sdr.exe"},
-		{"rtl_test.exe", "rtl_test.exe"},
-		{"rtlsdr.dll", "rtlsdr.dll"},
-		{"msvcr100.dll", "msvcr100.dll"},
-		{"pthreadVC2.dll", "pthreadVC2.dll"},
-	}
-
-	// The statically linked build, installed under the name everything
-	// looks for. The ordinary rtl_433.exe in the same archive wants
-	// SoapySDR.dll and two others beside it and will not start without
-	// them — one self-contained file is the better trade for a receiver
-	// that only ever drives it as a child process.
-	rtl433Wanted = []want{
-		{"rtl_433_64bit_static.exe", "rtl_433.exe"},
-	}
-)
-
 // Install puts this program, and what it needs, where Windows can find it.
 func Install(args []string) int {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	var (
 		dir        = fs.String("dir", defaultInstallDir(), "where to install")
 		noDownload = fs.Bool("no-download", false, "do not fetch the rtl-sdr programs")
+		latest     = fs.Bool("latest", false, "take the newest upstream release instead of the tested one (skips the hash check)")
 		noPath     = fs.Bool("no-path", false, "do not touch your PATH")
 		noShortcut = fs.Bool("no-shortcut", false, "do not make a Start Menu shortcut")
 		dryRun     = fs.Bool("dry-run", false, "say what would happen, and change nothing")
@@ -73,6 +44,14 @@ func Install(args []string) int {
 	if *dryRun {
 		fmt.Println("  (dry run — nothing will be changed)")
 	}
+	if !*noDownload {
+		fmt.Println()
+		fmt.Println("This downloads and runs programs from other projects, under their")
+		fmt.Println("own licences (GPL-2.0), verified against recorded SHA-256 hashes:")
+		fmt.Println()
+		describeSources("  ")
+		fmt.Println()
+	}
 
 	if err := step(*dryRun, "sdr.exe copied", func() error {
 		return copySelf(*dir)
@@ -80,13 +59,28 @@ func Install(args []string) int {
 		return 1
 	}
 
+	// A download that quietly failed used to leave an install that looked
+	// finished and then could not start a receiver, complaining about a
+	// program the person had never heard of. These are the whole point of
+	// the command, so a failure here is a failure.
+	var short bool
 	if !*noDownload {
-		_ = step(*dryRun, "rtl_tcp.exe, rtl_sdr.exe, rtl_test.exe", func() error {
-			return fetchInto(*dir, rtlsdrRepo, "Release.zip", rtlsdrWanted)
-		})
-		_ = step(*dryRun, "rtl_433.exe", func() error {
-			return fetchInto(*dir, rtl433Repo, "win-x64", rtl433Wanted)
-		})
+		if *latest {
+			fmt.Println("  [!!] -latest: taking whatever upstream published most recently,")
+			fmt.Println("       which cannot be checked against a known hash.")
+		}
+		for _, src := range sources {
+			names := make([]string, 0, len(src.wanted))
+			for _, w := range src.wanted {
+				names = append(names, w.to)
+			}
+			what := fmt.Sprintf("%s from %s %s", strings.Join(names, ", "), src.repo, src.tag)
+			if err := step(*dryRun, what, func() error {
+				return fetchInto(*dir, src, *latest)
+			}); err != nil {
+				short = true
+			}
+		}
 	}
 
 	if !*noPath {
@@ -99,6 +93,12 @@ func Install(args []string) int {
 	fmt.Println()
 	reportDriver()
 	fmt.Println()
+	if short {
+		fmt.Println("The programs the receivers drive could not be downloaded, so they")
+		fmt.Println("will not start. Check the connection and run sdr install again, or")
+		fmt.Printf("put rtl_tcp.exe, rtl_sdr.exe and rtl_433.exe in %s yourself.\n", *dir)
+		return 1
+	}
 	fmt.Println("Open a new terminal, then: sdr")
 	fmt.Println("To undo all of this:       sdr uninstall")
 	return 0
@@ -253,17 +253,19 @@ func sameFile(a, b string) (bool, error) {
 // and extracts the wanted files into dir. Paths inside the archive are
 // ignored: the files are wanted beside the program, not in whatever
 // folder structure the archive happens to use.
-func fetchInto(dir, repo, match string, wanted []want) error {
-	url, err := latestAsset(repo, match)
-	if err != nil {
-		return err
+func fetchInto(dir string, src source, latest bool) error {
+	url := "https://github.com/" + src.repo + "/releases/download/" + src.tag + "/" + src.asset
+	if latest {
+		var err error
+		if url, err = latestAsset(src.repo, src.match); err != nil {
+			return err
+		}
 	}
 	body, err := get(url)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(body)
-	defer func() {}()
 
 	z, err := zip.OpenReader(body)
 	if err != nil {
@@ -278,51 +280,196 @@ func fetchInto(dir, repo, match string, wanted []want) error {
 		if strings.Contains(f.Name, "x86/") {
 			continue
 		}
-		as, ok := wantedAs(filepath.Base(f.Name), wanted)
+		w, ok := wantedAs(filepath.Base(f.Name), src.wanted)
 		if !ok {
 			continue
 		}
-		if err := extract(f, filepath.Join(dir, as)); err != nil {
+		// The destination name comes from the list above, never from the
+		// archive, so a member called ..\..\windows\system32\x.dll
+		// cannot escape the install directory. Keep it that way.
+		if err := extract(f, filepath.Join(dir, w.to), w.sum, latest); err != nil {
 			return err
 		}
 		found++
 	}
-	if found != len(wanted) {
+	if found != len(src.wanted) {
 		return fmt.Errorf("found %d of %d expected files in %s",
-			found, len(wanted), filepath.Base(url))
+			found, len(src.wanted), filepath.Base(url))
 	}
 	return nil
 }
 
-// wantedAs reports whether a file in the archive is one being installed,
-// and under what name.
-func wantedAs(name string, wanted []want) (string, bool) {
-	for _, w := range wanted {
-		if strings.EqualFold(name, w.from) {
-			return w.to, true
-		}
-	}
-	return "", false
-}
-
-func extract(f *zip.File, dst string) error {
+// extract writes one file out, but only once it is the file expected.
+// Hashing what was downloaded before it is written is the whole defence
+// against a replaced release: these are programs that will be run.
+func extract(f *zip.File, dst, sum string, skipVerify bool) error {
 	rc, err := f.Open()
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
-	out, err := os.Create(dst)
+
+	// A few megabytes each, and the limit is what stops a hostile or
+	// broken archive from filling the disk through a decompression bomb.
+	buf, err := io.ReadAll(io.LimitReader(rc, maxMember))
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, rc)
-	return err
+	if int64(len(buf)) == maxMember {
+		return fmt.Errorf("%s is larger than %d bytes", f.Name, maxMember)
+	}
+
+	if err := verify(f.Name, buf, sum, skipVerify); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, buf, 0o644)
 }
 
-// latestAsset asks GitHub for the current release and picks the asset
-// whose name contains match. Asking rather than pinning a URL means an
-// install done next year gets the release current then.
+func reportDriver() {
+	out, err := powershell(driverScript)
+	switch {
+	case err != nil:
+		fmt.Println("  [ ] could not check the dongle's driver")
+		return
+	case out == "absent":
+		fmt.Println("  [ ] no RTL-SDR found — plug it in, then: sdr")
+		return
+	}
+	service, name, _ := strings.Cut(out, "|")
+	if strings.EqualFold(service, "WinUSB") || strings.EqualFold(service, "libusbK") {
+		fmt.Printf("  [ok] %s is on the %s driver\n", name, service)
+		return
+	}
+	fmt.Printf("  [!!] %s is on the %s driver, which will not let sdr open it\n", name, service)
+	fmt.Println("       Install Zadig from https://zadig.akeo.ie, choose this device,")
+	fmt.Println("       pick WinUSB, and press Replace Driver. Then run sdr again.")
+}
+
+// Nobody reads a switch before double-clicking. The first thing anyone
+// does with a downloaded exe is run it, so running it is what has to
+// offer the setup — otherwise the first thing they see is a complaint
+// about rtl_tcp, which names a program they have never heard of and
+// does not say what to do about it.
+
+// OfferInstall asks whether to set things up, when it is plain that
+// nobody has. It reports whether the command that follows can run.
+func OfferInstall() bool {
+	if installedHere() || haveRTLTCP() {
+		return true
+	}
+
+	dir := defaultInstallDir()
+	fmt.Println("sdr has not been set up on this computer yet.")
+	fmt.Println()
+	fmt.Println("The receivers do not talk to the dongle themselves. They drive")
+	fmt.Println("programs from two other projects, and none of them are here.")
+	fmt.Println("Setting up will, under your own account and without administrator")
+	fmt.Println("rights:")
+	fmt.Println()
+	fmt.Printf("  - copy sdr.exe to %s\n", dir)
+	fmt.Println("  - put that folder on your PATH, with a Start Menu shortcut")
+	fmt.Println("  - download and run programs written by other people:")
+	fmt.Println()
+	describeSources("      ")
+	fmt.Println()
+	fmt.Println("    These are downloaded from GitHub over HTTPS, and each file is")
+	fmt.Println("    checked against a SHA-256 recorded in this program before it is")
+	fmt.Println("    written. They are not part of this project and carry their own")
+	fmt.Println("    licences (GPL-2.0), which travel with the files.")
+	fmt.Println()
+
+	if !interactive() {
+		fmt.Println("Nothing is asking, so nothing was changed. To set up:  sdr install")
+		return false
+	}
+	if !yes("Set up now? [Y/n]: ") {
+		fmt.Println()
+		fmt.Println("Left alone. When you want it:  sdr install")
+		return false
+	}
+	fmt.Println()
+
+	if Install(nil) != 0 {
+		return false
+	}
+	// The PATH edit reaches new terminals, not this one, and this one is
+	// about to go looking for rtl_tcp.
+	os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fmt.Println()
+	fmt.Println("Carrying on with what you asked for.")
+	fmt.Println()
+	return true
+}
+
+// installedHere reports whether the running executable is the installed
+// one, rather than a copy somebody downloaded and ran where it landed.
+func installedHere() bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	same, _ := sameFile(self, filepath.Join(defaultInstallDir(), "sdr.exe"))
+	return same
+}
+
+// haveRTLTCP reports whether the one program the hub cannot start
+// without can be found — on the PATH, or sitting beside this binary,
+// which is how a portable copy is arranged.
+func haveRTLTCP() bool {
+	if _, err := exec.LookPath("rtl_tcp"); err == nil {
+		return true
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(filepath.Dir(self), "rtl_tcp.exe"))
+	return err == nil
+}
+
+// interactive reports whether there is somebody at the other end to
+// answer. Piped into a script, the honest thing is to say what would
+// have been asked and change nothing.
+func interactive() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func yes(prompt string) bool {
+	fmt.Print(prompt)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "", "y", "yes":
+		return true
+	}
+	return false
+}
+
+// PauseAtExit keeps the window up when Explorer opened it, because a
+// console it owns closes the moment the program returns and takes every
+// word of the explanation with it.
+func PauseAtExit() {
+	if !ownConsole() || !interactive() {
+		return
+	}
+	fmt.Print("\nPress Enter to close this window. ")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+// ownConsole reports whether this process is the only one attached to
+// its console, which is what being launched from Explorer looks like.
+// Started from a terminal, the shell is on the console too.
+func ownConsole() bool {
+	var list [8]uint32
+	n, _, _ := syscall.NewLazyDLL("kernel32.dll").
+		NewProc("GetConsoleProcessList").
+		Call(uintptr(unsafe.Pointer(&list[0])), uintptr(len(list)))
+	return n == 1
+}
+
 func latestAsset(repo, match string) (string, error) {
 	body, err := get("https://api.github.com/repos/" + repo + "/releases/latest")
 	if err != nil {
@@ -357,7 +504,18 @@ func latestAsset(repo, match string) (string, error) {
 // get downloads to a temporary file and returns its path, so that an
 // archive of a few megabytes is not held in memory.
 func get(url string) (string, error) {
-	c := &http.Client{Timeout: 3 * time.Minute}
+	if err := github(url); err != nil {
+		return "", err
+	}
+	c := &http.Client{
+		Timeout: 3 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return github(req.URL.String())
+		},
+	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
@@ -377,8 +535,12 @@ func get(url string) (string, error) {
 		return "", err
 	}
 	defer tmp.Close()
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxDownload))
+	if err != nil || n == maxDownload {
 		os.Remove(tmp.Name())
+		if err == nil {
+			err = fmt.Errorf("%s is larger than %d bytes", url, maxDownload)
+		}
 		return "", err
 	}
 	return tmp.Name(), nil
@@ -456,22 +618,3 @@ Write-Output ($d.Service + '|' + $d.FriendlyName)
 // else open it; Zadig rebinds it to WinUSB, and that needs administrator
 // rights and a choice only a person should make, because the same dialog
 // can unbind quite different hardware.
-func reportDriver() {
-	out, err := powershell(driverScript)
-	switch {
-	case err != nil:
-		fmt.Println("  [ ] could not check the dongle's driver")
-		return
-	case out == "absent":
-		fmt.Println("  [ ] no RTL-SDR found — plug it in, then: sdr")
-		return
-	}
-	service, name, _ := strings.Cut(out, "|")
-	if strings.EqualFold(service, "WinUSB") || strings.EqualFold(service, "libusbK") {
-		fmt.Printf("  [ok] %s is on the %s driver\n", name, service)
-		return
-	}
-	fmt.Printf("  [!!] %s is on the %s driver, which will not let sdr open it\n", name, service)
-	fmt.Println("       Install Zadig from https://zadig.akeo.ie, choose this device,")
-	fmt.Println("       pick WinUSB, and press Replace Driver. Then run sdr again.")
-}

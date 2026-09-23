@@ -82,16 +82,40 @@ WSL. `./sdr status` checks all three.
 
 ## Windows
 
-`./sdr build windows` produces **one** `sdr.exe`. Copy it over and:
+`./sdr build windows` produces **one** `sdr.exe` — or take one from the
+[releases](https://github.com/thatSFguy/swDefinedRadio/releases). Copy it
+over and run it. The first run offers to set itself up; say yes, or do it
+deliberately with `sdr.exe install`.
 
-```
-sdr.exe install
-```
+It installs under `%LOCALAPPDATA%`, adds itself to your PATH, and makes a
+Start Menu shortcut. No administrator rights — none of it belongs to the
+machine rather than to you. `sdr uninstall` puts it all back.
 
-It installs under `%LOCALAPPDATA%`, adds itself to your PATH, and
-downloads the `rtl-sdr` programs the receivers drive as child processes.
-No administrator rights — none of it belongs to the machine rather than
-to you. `sdr uninstall` puts it all back.
+### What it downloads, and from whom
+
+This program does not talk to the dongle itself. It drives two other
+projects' programs as child processes, and the install downloads them:
+
+| From | Release | Files |
+|---|---|---|
+| [rtlsdrblog/rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog) | `V1.4.0` | `rtl_tcp.exe`, `rtl_sdr.exe`, `rtl_test.exe`, `rtlsdr.dll`, `msvcr100.dll`, `pthreadVC2.dll` |
+| [merbanan/rtl_433](https://github.com/merbanan/rtl_433) | `25.12` | `rtl_433.exe` |
+
+**These are not part of this project.** They are other people's work under
+their own licences (GPL-2.0), and installing means running their binaries
+on your machine. That is worth knowing before you agree to it, so the
+installer says the same thing and waits for an answer.
+
+Both are pinned to the release named above, and the SHA-256 of every file
+is recorded in `internal/cli/install_sources.go` and checked before
+anything is written — so a replaced upstream release fails the install
+rather than quietly becoming what you run. Downloads are HTTPS from
+GitHub only, redirects included. `sdr install -latest` takes whatever
+upstream published most recently instead, which cannot be checked against
+a known hash; it says so when you use it.
+
+On Linux and macOS these come from the package manager instead
+(`apt install rtl-sdr rtl-433`), and nothing is downloaded.
 
 The one thing it cannot do is the driver. Windows binds an RTL2832U stick
 to its television driver, which will not let anything else open it;

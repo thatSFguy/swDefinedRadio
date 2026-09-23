@@ -29,3 +29,12 @@ func Uninstall([]string) int {
 	fmt.Println("uninstall is for Windows. Here, remove the symlink you made.")
 	return 0
 }
+
+// OfferInstall is a Windows affair. Everywhere else the rtl-sdr programs
+// come from the package manager, and a missing one is a sentence the
+// package manager already says better than we could.
+func OfferInstall() bool { return true }
+
+// PauseAtExit likewise: nothing here is launched by double-clicking it
+// into a console that vanishes.
+func PauseAtExit() {}
