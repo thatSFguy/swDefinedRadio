@@ -23,10 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
-	"os"
-	"os/exec"
-	"strconv"
 	"sync"
 	"time"
 
@@ -375,8 +371,14 @@ func (b *Broker) releaseLocked() {
 	b.held = false
 }
 
-// ensureServer starts rtl_tcp if it is not running.
+// ensureServer starts rtl_tcp if it is not running — including when it
+// was, and has since died: unplugged, or never able to open the dongle
+// in the first place.
 func (b *Broker) ensureServer(cfg sdr.Config) error {
+	if b.srv != nil && b.srv.exited() {
+		log.Printf("radio: %v; starting it again", b.srv.why())
+		b.stopServer()
+	}
 	if b.srv != nil {
 		return nil
 	}
@@ -407,7 +409,9 @@ func (b *Broker) dropConn() {
 }
 
 // ensureConn dials the server, retrying while it is still coming up or
-// while a previous client is still letting go.
+// while a previous client is still letting go — but not once it has
+// exited, when waiting out the rest of serverBoot would only end in a
+// refused connection that hides why.
 func (b *Broker) ensureConn(cfg sdr.Config) (*sdr.RTLTCP, error) {
 	if b.conn != nil {
 		return b.conn, nil
@@ -421,9 +425,16 @@ func (b *Broker) ensureConn(cfg sdr.Config) (*sdr.RTLTCP, error) {
 			return c, nil
 		}
 		last = err
+		// Dialled first and checked second, so that an rtl_tcp somebody
+		// else already had listening still serves, even though ours
+		// could not bind the port and gave up.
+		if b.srv != nil && b.srv.exited() {
+			return nil, fmt.Errorf("radio: %w", b.srv.why())
+		}
 		select {
 		case <-b.ctx.Done():
 			return nil, b.ctx.Err()
+		case <-b.srv.done():
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
@@ -451,7 +462,7 @@ func (b *Broker) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return State{
-		Running: b.srv != nil,
+		Running: b.srv != nil && !b.srv.exited(),
 		Held:    b.held,
 		Mode:    b.mode.String(),
 		Addr:    b.o.Addr,
@@ -459,38 +470,34 @@ func (b *Broker) State() State {
 	}
 }
 
-// server is the rtl_tcp child process.
+// server is the rtl_tcp child process. A zero one stands in for a server
+// the tests run themselves, which never exits.
 type server struct {
-	cmd *exec.Cmd
+	p *sdr.Server
 }
 
 func startServer(ctx context.Context, addr string, cfg sdr.Config) (*server, error) {
-	host, port, err := net.SplitHostPort(addr)
+	p, err := sdr.StartRTLTCP(ctx, addr, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("radio: bad rtl_tcp address %q: %w", addr, err)
+		return nil, fmt.Errorf("radio: %w", err)
 	}
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	args := []string{"-a", host, "-p", port, "-d", strconv.Itoa(cfg.DeviceIndex)}
-	if cfg.CenterFreq != 0 {
-		args = append(args, "-f", strconv.FormatUint(uint64(cfg.CenterFreq), 10))
-	}
-	if cfg.SampleRate != 0 {
-		args = append(args, "-s", strconv.FormatUint(uint64(cfg.SampleRate), 10))
-	}
-
-	cmd := exec.CommandContext(ctx, "rtl_tcp", args...)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("radio: start rtl_tcp (is rtl-sdr installed?): %w", err)
-	}
-	return &server{cmd: cmd}, nil
+	return &server{p: p}, nil
 }
 
-func (s *server) stop() {
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+// done is closed when the process exits; nil, which never is, for none.
+func (s *server) done() <-chan struct{} {
+	if s == nil || s.p == nil {
+		return nil
 	}
-	_ = s.cmd.Wait()
+	return s.p.Done()
+}
+
+func (s *server) exited() bool { return s.p != nil && s.p.Exited() }
+
+func (s *server) why() error { return s.p.Err() }
+
+func (s *server) stop() {
+	if s.p != nil {
+		s.p.Stop()
+	}
 }

@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,4 +303,55 @@ func TestAddressModeProvesTheServerIsListening(t *testing.T) {
 	}
 	// and the broker is not holding the slot the receiver needs
 	waitFor(t, "the broker to let go", func() bool { return !f.hasClient() })
+}
+
+// An rtl_tcp that has died is not a running server. The broker used to
+// go on counting it as one, so every later activation dialled a port
+// nothing would ever listen on again, and only restarting the whole
+// program brought the radio back. Each attempt has to start a fresh one,
+// and say why the last one went.
+func TestDeadServerIsRestartedAndExplained(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake rtl_tcp is a shell script")
+	}
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	script := "#!/bin/sh\necho run >> " + runs + "\necho 'No supported devices found.' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "rtl_tcp"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	b := New(ctx, Options{Addr: addr, Settle: 10 * time.Millisecond})
+	t.Cleanup(b.Close)
+
+	for i := 0; i < 2; i++ {
+		start := time.Now()
+		_, err := b.Acquire(ctx, need(100_000_000, 2_048_000))
+		if err == nil {
+			t.Fatal("acquired a radio whose server exited")
+		}
+		if !strings.Contains(err.Error(), "No supported devices found.") {
+			t.Errorf("attempt %d does not say why: %v", i+1, err)
+		}
+		if took := time.Since(start); took > 3*time.Second {
+			t.Errorf("attempt %d took %v to notice the server had gone", i+1, took)
+		}
+		if b.State().Running {
+			t.Errorf("attempt %d: a dead server is reported as running", i+1)
+		}
+	}
+	got, _ := os.ReadFile(runs)
+	if n := strings.Count(string(got), "run"); n != 2 {
+		t.Errorf("rtl_tcp was started %d times over two attempts, want 2", n)
+	}
 }

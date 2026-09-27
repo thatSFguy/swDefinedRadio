@@ -3,10 +3,6 @@ package sdr
 import (
 	"context"
 	"fmt"
-	"net"
-	"os"
-	"os/exec"
-	"strconv"
 	"time"
 )
 
@@ -21,31 +17,9 @@ func EnsureRTLTCP(ctx context.Context, addr string, cfg Config) (*RTLTCP, func()
 		return c, func() {}, nil
 	}
 
-	host, port, err := net.SplitHostPort(addr)
+	srv, err := StartRTLTCP(ctx, addr, cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("bad rtl_tcp address %q: %w", addr, err)
-	}
-	if host == "" {
-		host = "127.0.0.1"
-	}
-
-	// Direct sampling is set over the protocol once connected; rtl_tcp
-	// has no command-line flag for it.
-	cmd := exec.CommandContext(ctx, "rtl_tcp",
-		"-a", host, "-p", port,
-		"-d", strconv.Itoa(cfg.DeviceIndex),
-		"-f", strconv.FormatUint(uint64(cfg.CenterFreq), 10),
-		"-s", strconv.FormatUint(uint64(cfg.SampleRate), 10),
-	)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start rtl_tcp (is rtl-sdr installed?): %w", err)
-	}
-	stop := func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
+		return nil, nil, err
 	}
 
 	// rtl_tcp takes a moment to claim the device and open its socket.
@@ -53,14 +27,17 @@ func EnsureRTLTCP(ctx context.Context, addr string, cfg Config) (*RTLTCP, func()
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			stop()
+			srv.Stop()
 			return nil, nil, ctx.Err()
 		case <-time.After(250 * time.Millisecond):
 		}
 		if c, err := DialRTLTCP(addr, cfg); err == nil {
-			return c, stop, nil
+			return c, srv.Stop, nil
+		}
+		if srv.Exited() {
+			return nil, nil, srv.Err()
 		}
 	}
-	stop()
+	srv.Stop()
 	return nil, nil, fmt.Errorf("rtl_tcp did not come up on %s", addr)
 }
