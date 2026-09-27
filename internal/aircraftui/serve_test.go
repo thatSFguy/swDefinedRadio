@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -329,5 +330,68 @@ func TestAPIShape(t *testing.T) {
 	}
 	if a := got.Aircraft[0]; a.Hex != "40621d" || a.Callsign != "TEST123" {
 		t.Errorf("aircraft = %+v, want hex 40621d callsign TEST123", a)
+	}
+}
+
+// TestWatchlistAPI edits the list from the page's side, sees the alarm
+// arrive through /api/alerts, and acknowledges it.
+func TestWatchlistAPI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watchlist.json")
+	w := alert.New(nil, time.Hour, nil)
+	w.WatchFlights(alert.SetupWatchlist(path), time.Minute)
+	tr := track.New(time.Minute)
+	h, err := Handler(tr, w, Options{ConfigPath: filepath.Join(t.TempDir(), "config.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	do := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	if code, body := do("PUT", "/api/watchlist", `{"flights":["*"]}`); code != http.StatusBadRequest {
+		t.Errorf("a match-everything entry was accepted: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/watchlist", `{"flights":["dl1234"]}`); code != http.StatusOK || !strings.Contains(body, `"DL1234"`) {
+		t.Fatalf("PUT = %d %s", code, body)
+	}
+	if b, err := os.ReadFile(path); err != nil || !strings.Contains(string(b), "DL1234") {
+		t.Errorf("the list was not saved: %q %v", b, err)
+	}
+
+	w.Check(tr.Update(modes.ADSB{ICAO: 0xA1B2C3, Callsign: "DAL1234"}, -20, time.Now()), time.Now())
+
+	alarms := func() []alert.Alarm {
+		_, body := do("GET", "/api/alerts", "")
+		var got struct {
+			Flights []string      `json:"flights"`
+			Alarms  []alert.Alarm `json:"alarms"`
+		}
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		if len(got.Flights) != 1 {
+			t.Errorf("flights = %v", got.Flights)
+		}
+		return got.Alarms
+	}
+	if al := alarms(); len(al) != 1 || al[0].Hex != "a1b2c3" || al[0].Acked {
+		t.Fatalf("alarms = %+v, want one unacknowledged", al)
+	}
+	if code, body := do("POST", "/api/alarms/ack", `{"hex":"a1b2c3"}`); code != http.StatusOK {
+		t.Fatalf("ack = %d %s", code, body)
+	}
+	if al := alarms(); len(al) != 1 || !al[0].Acked {
+		t.Fatalf("after ack, alarms = %+v", al)
 	}
 }

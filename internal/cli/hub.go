@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thatSFguy/swDefinedRadio/internal/alert"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/adsb"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/airband"
 	"github.com/thatSFguy/swDefinedRadio/internal/apps/fm"
@@ -77,6 +78,7 @@ func Hub(args []string) {
 		alertLog   = fs.String("alert-log", "data/alerts.jsonl", "append raised alerts here")
 		alertCmd   = fs.String("alert-cmd", "", "shell command to run for each alert")
 		noAlerts   = fs.Bool("no-alerts", false, "do not watch for anything")
+		watchPath  = fs.String("watchlist", "watchlist.json", "flights to sound a standing alarm for; edited from the map page")
 		quiet      = fs.Bool("quiet", false, "suppress the periodic status lines")
 	)
 	fs.Parse(args)
@@ -112,6 +114,13 @@ func Hub(args []string) {
 		}
 	}
 
+	// One watchlist for both aircraft receivers, so a flight added on
+	// one tab is watched for on the other too.
+	var watchlist *alert.Watchlist
+	if !*noAlerts {
+		watchlist = alert.SetupWatchlist(*watchPath)
+	}
+
 	adsbApp, err := adsb.New(ctx, adsb.Config{
 		Freq: 1_090_000_000, Gain: *gain, PPM: *ppm, Device: *device,
 		Lat: *lat, Lon: *lon, PositionNote: positionNote(cfgPath),
@@ -119,6 +128,7 @@ func Hub(args []string) {
 		TileURL: *tileURL, ConfigPath: cfgPath, AllowSetPosition: true,
 		OnSetPosition: moveTo,
 		NoAlerts:      *noAlerts, AlertsPath: *alertsPath, AlertLog: *alertLog, AlertCmd: *alertCmd,
+		Watchlist: watchlist,
 	})
 	if err != nil {
 		log.Fatalf("adsb: %v", err)
@@ -130,6 +140,7 @@ func Hub(args []string) {
 		TileURL: *tileURL, ConfigPath: cfgPath, AllowSetPosition: true,
 		OnSetPosition: moveTo,
 		NoAlerts:      *noAlerts, AlertsPath: *alertsPath, AlertLog: *alertLog, AlertCmd: *alertCmd,
+		Watchlist: watchlist,
 	})
 	if err != nil {
 		log.Fatalf("uat: %v", err)

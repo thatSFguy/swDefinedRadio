@@ -111,3 +111,21 @@ func WriteExample(path string) error {
 	log.Printf("wrote %s — edit it, then restart the receiver", path)
 	return nil
 }
+
+// SetupWatchlist opens the watchlist for a receiver. A broken file is
+// reported and left alone: the list starts empty and is not saved back,
+// since saving an edit made from the page would overwrite whatever was
+// in it.
+func SetupWatchlist(path string) *Watchlist {
+	l, err := OpenWatchlist(path)
+	if err != nil {
+		log.Printf("watchlist: %v", err)
+		log.Print("watchlist: starting empty, and not saving changes until the file is fixed")
+		l, _ = OpenWatchlist("")
+		return l
+	}
+	if f := l.Flights(); len(f) > 0 {
+		log.Printf("watchlist: %d flights (%s)", len(f), path)
+	}
+	return l
+}

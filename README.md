@@ -187,6 +187,10 @@ air ambulances and anything unusually high. Add your own:
 { "name": "low and close", "below_ft": 3000, "within_nm": 10 }
 ```
 
+For a particular flight, press **Watch** on the map page and type its
+number — `DL1234`, `UAL422`, a tail number. When it comes into range the
+page sounds an alarm until you acknowledge it or the aircraft leaves.
+
 Alerts appear in the page, can beep or raise a desktop notification, and
 append to `data/alerts.jsonl`. `-alert-cmd` runs anything you like, with
 the details in the environment rather than on the command line — so a

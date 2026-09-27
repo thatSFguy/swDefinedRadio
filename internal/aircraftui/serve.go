@@ -76,13 +76,20 @@ func Handler(t *track.Tracker, w *alert.Watcher, o Options) (http.Handler, error
 			Watching bool          `json:"watching"`
 			Rules    []alert.Rule  `json:"rules"`
 			Alerts   []alert.Alert `json:"alerts"`
-		}{Watching: w != nil, Rules: []alert.Rule{}, Alerts: []alert.Alert{}}
+			Flights  []string      `json:"flights"`
+			Alarms   []alert.Alarm `json:"alarms"`
+		}{Watching: w != nil, Rules: []alert.Rule{}, Alerts: []alert.Alert{},
+			Flights: []string{}, Alarms: []alert.Alarm{}}
 		if w != nil {
 			out.Rules = w.Rules()
 			out.Alerts = w.Recent(100)
+			out.Flights = w.Watchlist().Flights()
+			out.Alarms = w.Alarms(time.Now())
 		}
 		_ = json.NewEncoder(rw).Encode(out)
 	})
+
+	watchlistHandlers(mux, w)
 
 	// Which receiver this is, so one page can title itself for either.
 	mux.HandleFunc("GET /api/info", func(rw http.ResponseWriter, r *http.Request) {

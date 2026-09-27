@@ -374,6 +374,60 @@ rather than quietly matching everything. A broken rules file is
 reported and the built-in rules are used, so a typo cannot leave a
 receiver silently watching for nothing.
 
+### Watched flights
+
+For the one flight you are waiting for — someone's arrival, a
+particular aircraft's daily run — press **Watch** in the alerts panel
+and type its flight numbers, separated by spaces:
+
+```
+DL1234 UAL422 N12345 *5123
+```
+
+When one is heard, a red banner appears over the map and the page
+sounds a repeating two-tone alarm and flashes its tab title. It keeps
+going until you press **Acknowledge** or the aircraft leaves — drops out
+of the table, which with the default `-ttl` is a minute after it was
+last heard. An acknowledged flight stays on the banner, quietly, while
+it is still in range; if it leaves and comes back later, the alarm
+sounds again. Acknowledging is kept by the receiver, so it silences
+every browser showing the page, not only the one you clicked in.
+
+The alarm sounds whether or not **Sound** is on, since putting a flight
+on the list was the request. A browser will not play audio on a page
+nobody has clicked, though, so after opening or reloading the page
+click anywhere on it once; the banner says so if it is waiting for
+that. With **Notify** on, each alarm also raises a desktop notification
+that stays until dismissed.
+
+Each alarm is also an ordinary alert — the `watchlist` rule, urgent —
+so it is logged to `data/alerts.jsonl` and runs `-alert-cmd` once per
+visit, which is the way to be told with the browser closed.
+
+What to type:
+
+| Entry | Matches |
+| --- | --- |
+| `DL1234` | the ticket's flight number: common airline codes are translated to the callsign actually transmitted, `DAL1234` |
+| `DAL1234` | the callsign as transmitted |
+| `N12345` | a registration, which light aircraft use as their callsign |
+| `*5123` | flight 5123 under any code |
+
+Leading zeros in the number do not matter. A regional flight sold under
+a mainline number is flown under the regional operator's callsign —
+Delta's DL5123 is transmitted as `EDV5123` — so type that, or `*5123`.
+
+The list is kept in `watchlist.json` (`-watchlist` to put it elsewhere)
+and shared by both aircraft tabs of the hub. It can also be edited over
+the API: `PUT /api/watchlist` with `{"flights": ["DL1234"]}`, and
+`POST /api/alarms/ack` with `{"hex": "a1b2c3"}`, or an empty body for
+all of them. `GET /api/alerts` carries `flights` and `alarms`.
+
+A background tab is throttled by the browser and may be up to a minute
+late to notice a new alarm; once it is sounding it keeps sounding.
+Alarms need the aircraft receiver to be on the air, so in the hub they
+sound while an aircraft tab holds the radio.
+
 ### Alerts elsewhere
 
 Every alert is appended to `data/alerts.jsonl`, one JSON object per
@@ -406,6 +460,7 @@ second deadline: one that hangs must not take the radio down with it.
 | `-alert-log` | `data/alerts.jsonl` | Where raised alerts are appended |
 | `-alert-cmd` | unset | Shell command run for each alert |
 | `-no-alerts` | off | Watch for nothing |
+| `-watchlist` | `watchlist.json` | Flights that sound a standing alarm; edited from the page |
 
 ### What the alerts cannot see
 

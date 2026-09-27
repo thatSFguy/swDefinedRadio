@@ -13,11 +13,12 @@
 /logs/
 /data/
 
-# Your own antenna position, and your own alert rules. The position is
-# where you live, so it stays out of the repository; copy
-# config.example.json and run ./sdr setpos.
+# Your own antenna position, your own alert rules and the flights you
+# are waiting for. The position is where you live, so it stays out of
+# the repository; copy config.example.json and run ./sdr setpos.
 /config.json
 /alerts.json
+/watchlist.json
 
 # Raw IQ captures: large, and a recording of a place and time.
 *.iq

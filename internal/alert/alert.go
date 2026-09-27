@@ -106,6 +106,11 @@ type Watcher struct {
 	mu     sync.Mutex
 	fired  map[string]time.Time
 	recent []Alert // newest first
+
+	// The watchlist, if one is attached: see WatchFlights.
+	list   *Watchlist
+	gone   time.Duration
+	alarms map[string]*Alarm // by hex
 }
 
 // New returns a watcher. sink is called once per raised alert, from
@@ -142,10 +147,7 @@ func (w *Watcher) Check(ac track.Aircraft, now time.Time) []Alert {
 		}
 		w.fired[key] = now
 		a := alertFor(r, ac, now)
-		w.recent = append([]Alert{a}, w.recent...)
-		if len(w.recent) > keep {
-			w.recent = w.recent[:keep]
-		}
+		w.record(a)
 		w.prune(now)
 		w.mu.Unlock()
 
@@ -154,7 +156,28 @@ func (w *Watcher) Check(ac track.Aircraft, now time.Time) []Alert {
 			w.sink(a)
 		}
 	}
+
+	w.mu.Lock()
+	a, ok := w.checkWatchlist(ac, now)
+	if ok {
+		w.record(a)
+	}
+	w.mu.Unlock()
+	if ok {
+		raised = append(raised, a)
+		if w.sink != nil {
+			w.sink(a)
+		}
+	}
 	return raised
+}
+
+// record keeps an alert for the UI. Called with w.mu held.
+func (w *Watcher) record(a Alert) {
+	w.recent = append([]Alert{a}, w.recent...)
+	if len(w.recent) > keep {
+		w.recent = w.recent[:keep]
+	}
 }
 
 // Recent returns the alerts raised so far, newest first.

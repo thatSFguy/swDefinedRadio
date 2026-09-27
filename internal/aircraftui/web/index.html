@@ -154,6 +154,56 @@
     100% { r: 22px; opacity: 0; }
   }
 
+  /* Watched flights. The banner sits over the map, where it cannot be
+     scrolled out of sight, and stays until acknowledged or the flight
+     has gone. */
+  #alarm {
+    position: fixed; top: 10px; left: 60px; right: 480px; z-index: 1100;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    pointer-events: none;
+  }
+  #alarm .one {
+    pointer-events: auto; display: flex; align-items: center; gap: 10px;
+    max-width: 100%; padding: 8px 12px; border-radius: 6px;
+    background: #3d1418; border: 1px solid var(--bad); color: var(--fg);
+    box-shadow: 0 4px 18px rgba(0,0,0,.5); animation: alarm 1s ease-in-out infinite alternate;
+  }
+  #alarm .one.acked {
+    animation: none; background: rgba(22,27,34,.92); border-color: var(--line);
+    color: var(--dim); padding: 4px 10px; font-size: 12px;
+  }
+  #alarm .one b { color: var(--bad); font-size: 15px; letter-spacing: .3px; }
+  #alarm .one.acked b { color: var(--fg); font-size: 13px; }
+  #alarm .one .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #alarm button {
+    background: none; border: 1px solid var(--line); border-radius: 4px; color: var(--fg);
+    font: inherit; font-size: 12px; padding: 2px 9px; cursor: pointer; white-space: nowrap;
+  }
+  #alarm button.ack { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  #alarm button:hover { filter: brightness(1.15); }
+  #alarm .hint {
+    pointer-events: auto; font-size: 11px; color: var(--warn);
+    background: rgba(13,17,23,.9); border-radius: 4px; padding: 2px 8px;
+  }
+  @keyframes alarm { from { box-shadow: 0 0 0 0 rgba(248,81,73,.6); } to { box-shadow: 0 0 0 6px rgba(248,81,73,0); } }
+  /* The watchlist editor, folded into the alerts panel. */
+  #wl { padding: 6px 14px 9px; border-top: 1px solid #1b212b; font-size: 12px; }
+  #wl form { display: flex; gap: 6px; }
+  #wl input {
+    flex: 1; min-width: 0; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px;
+    font: inherit; font-family: ui-monospace, SFMono-Regular, monospace; text-transform: uppercase;
+  }
+  #wl input:focus { outline: none; border-color: var(--accent); }
+  #wl button {
+    background: none; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--fg); font: inherit; padding: 2px 10px; cursor: pointer;
+  }
+  #wl .note { margin-top: 4px; color: var(--dim); font-size: 11px; }
+  #wl .note.bad { color: var(--bad); }
+  #wl .note.ok { color: #3fb950; }
+  @media (max-width: 900px) { #alarm { left: 50px; right: 10px; } }
+
   .plane { transition: transform .4s linear; transform-origin: center; }
   .lbl {
     background: rgba(13,17,23,.82); border: 1px solid var(--line); border-radius: 3px;
@@ -167,6 +217,7 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="alarm" role="alert" aria-live="assertive"></div>
 <aside>
   <header>
     <h1>ADS-B Receiver</h1>
@@ -192,7 +243,17 @@
       <span class="sp"></span>
       <button id="sound" aria-pressed="false" title="beep when something urgent appears">Sound</button>
       <button id="notify" aria-pressed="false" title="desktop notification for urgent alerts">Notify</button>
+      <button id="wlbtn" aria-pressed="false" title="flights to sound an alarm for until you acknowledge them">Watch</button>
       <button id="aclear" title="clear the list">Clear</button>
+    </div>
+    <div id="wl" hidden>
+      <form id="wlform">
+        <input id="wlin" placeholder="DL1234 UAL422 N12345" autocomplete="off" spellcheck="false"
+          aria-label="flights to watch for">
+        <button type="submit">Save</button>
+      </form>
+      <div class="note" id="wlnote">Flight numbers or callsigns, separated by spaces. When one is heard,
+        the page sounds an alarm until you acknowledge it or the aircraft leaves.</div>
     </div>
     <ul id="alist"></ul>
   </section>
@@ -573,7 +634,7 @@ fetch('/api/position').then(r => r.json()).then(showPosition)
 // running rather than claiming to be the 1090 MHz one.
 fetch('/api/info').then(r => r.json()).then(info => {
   if (!info.name) return;
-  document.title = `${info.name} Receiver`;
+  document.title = baseTitle = `${info.name} Receiver`;
   document.querySelector('h1').textContent = `${info.name} Receiver`;
   const band = document.getElementById('band');
   if (band && info.band) band.textContent = info.band;
@@ -740,19 +801,21 @@ notify.onclick = async () => {
 // unlocks itself on the first click or key anywhere on the page.
 // Notify is only restored while permission still stands: showing it lit
 // when the browser has since revoked it would be a lie.
-if (recall('alertSound') === 'true') {
-  sound.setAttribute('aria-pressed', 'true');
-  const unlock = () => {
-    try {
-      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
-      if (audio.state === 'suspended') audio.resume();
-    } catch (e) { /* no audio device */ }
-    removeEventListener('pointerdown', unlock);
-    removeEventListener('keydown', unlock);
-  };
-  addEventListener('pointerdown', unlock);
-  addEventListener('keydown', unlock);
+//
+// The unlock is armed whether or not Sound is: a watched flight sounds
+// its alarm regardless, since putting it on the watchlist was the ask.
+if (recall('alertSound') === 'true') sound.setAttribute('aria-pressed', 'true');
+function unlockAudio() {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    // Once it is running, the "click to hear it" hint can go.
+    if (audio.state === 'suspended') audio.resume().then(drawAlarms);
+  } catch (e) { /* no audio device */ }
+  removeEventListener('pointerdown', unlockAudio);
+  removeEventListener('keydown', unlockAudio);
 }
+addEventListener('pointerdown', unlockAudio);
+addEventListener('keydown', unlockAudio);
 if (recall('alertNotify') === 'true' && 'Notification' in window &&
     Notification.permission === 'granted') {
   notify.setAttribute('aria-pressed', 'true');
@@ -826,6 +889,8 @@ async function pollAlerts() {
     flagged.set(a.hex, f);
   }
   showAlerts(data.alerts, data.watching, (data.rules || []).length);
+  showWatchlist(data.flights || []);
+  showAlarms(data.alarms || []);
 
   // Announce only what has arrived since the last poll, and only once.
   const fresh = data.alerts.filter(a => (!alertsSeen || a.at > alertsSeen) && (!cleared || a.at > cleared));
@@ -836,6 +901,175 @@ async function pollAlerts() {
   if (data.alerts.length) alertsSeen = data.alerts[0].at;
   else if (alertsSeen === null) alertsSeen = '';
 }
+// --- watched flights -------------------------------------------------
+// The receiver keeps the list and the alarms, and remembers which have
+// been acknowledged, so every tab showing this receiver agrees. This
+// page's part is to be impossible to miss: a banner over the map, a
+// tone repeated until someone answers it, a flashing tab title, and a
+// notification that stays up.
+let baseTitle = document.title;
+let alarms = [];
+const alarmNotes = new Map();   // hex -> Notification still on screen
+const wlbtn = document.getElementById('wlbtn');
+const wl = document.getElementById('wl');
+const wlin = document.getElementById('wlin');
+const wlnote = document.getElementById('wlnote');
+let wlEditing = false;          // do not overwrite what is being typed
+
+wlbtn.onclick = () => {
+  wl.hidden = !wl.hidden;
+  wlbtn.setAttribute('aria-pressed', !wl.hidden);
+  if (!wl.hidden) wlin.focus();
+  else wlEditing = false;   // an abandoned edit gives way to the saved list
+};
+wlin.oninput = () => { wlEditing = true; };
+
+function showWatchlist(flights) {
+  wlbtn.textContent = flights.length ? `Watch ${flights.length}` : 'Watch';
+  wlbtn.title = flights.length
+    ? 'watching for ' + flights.join(', ')
+    : 'flights to sound an alarm for until you acknowledge them';
+  if (!wlEditing && document.activeElement !== wlin) wlin.value = flights.join(' ');
+}
+
+document.getElementById('wlform').onsubmit = async e => {
+  e.preventDefault();
+  const flights = wlin.value.split(/[\s,;]+/).filter(Boolean);
+  try {
+    const r = await fetch('/api/watchlist', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flights }),
+    });
+    const text = await r.text();
+    if (!r.ok) { wlNote(text.trim(), 'bad'); return; }
+    const saved = JSON.parse(text).flights;
+    wlEditing = false;
+    wlin.value = saved.join(' ');
+    showWatchlist(saved);
+    wlNote(saved.length ? `watching for ${saved.join(', ')}` : 'watchlist cleared', 'ok');
+  } catch (err) {
+    wlNote('could not reach the receiver: ' + err, 'bad');
+  }
+};
+
+function wlNote(text, kind) {
+  wlnote.textContent = text;
+  wlnote.className = 'note ' + (kind || '');
+}
+
+async function ack(hex) {
+  try {
+    const r = await fetch('/api/alarms/ack', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hex: hex || '' }),
+    });
+    if (r.ok) showAlarms((await r.json()).alarms);
+  } catch (e) { /* the next poll will try again */ }
+}
+
+function showAlarms(list) {
+  alarms = list;
+  // Close notifications for alarms that have been answered or have gone.
+  for (const [hex, n] of alarmNotes) {
+    if (!list.some(a => a.hex === hex && !a.acked)) { n.close(); alarmNotes.delete(hex); }
+  }
+  for (const a of list) {
+    if (a.acked || alarmNotes.has(a.hex)) continue;
+    alarmNotes.set(a.hex, alarmNotify(a));
+  }
+  drawAlarms();
+}
+
+function alarmText(a) {
+  const bits = [];
+  if (a.callsign !== a.flight) bits.push(`watching ${a.flight}`);
+  if (a.distance_nm) bits.push(a.distance_nm.toFixed(0) + ' NM');
+  if (a.altitude) bits.push(a.altitude.toLocaleString() + ' ft');
+  bits.push('since ' + new Date(a.since).toTimeString().slice(0, 5));
+  return bits.join(' · ');
+}
+
+function drawAlarms() {
+  const box = document.getElementById('alarm');
+  // Unanswered first: those are the ones asking for something.
+  const items = [...alarms].sort((x, y) => x.acked - y.acked).map(a => {
+    const div = document.createElement('div');
+    div.className = 'one' + (a.acked ? ' acked' : '');
+    div.innerHTML = `<b>${esc(a.callsign)}</b>
+      <span class="d">${a.acked ? 'in range' : 'watched flight in range'} · ${esc(alarmText(a))}</span>`;
+    const show = document.createElement('button');
+    show.textContent = 'Show';
+    show.onclick = () => {
+      const s = state.get(a.hex);
+      if (s) { autoFit = false; map.panTo(s.marker.getLatLng()); }
+      if (selected !== a.hex) select(a.hex, false);
+    };
+    div.append(show);
+    if (!a.acked) {
+      const b = document.createElement('button');
+      b.className = 'ack';
+      b.textContent = 'Acknowledge';
+      b.onclick = () => ack(a.hex);
+      div.append(b);
+    }
+    return div;
+  });
+  const ringing = alarms.some(a => !a.acked);
+  if (ringing && (!audio || audio.state !== 'running')) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'click anywhere on this page to let the alarm sound';
+    items.push(hint);
+  }
+  box.replaceChildren(...items);
+}
+
+function alarmNotify(a) {
+  if (notify.getAttribute('aria-pressed') !== 'true') return null;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return null;
+  try {
+    const n = new Notification(`${a.callsign} is in range`, {
+      body: alarmText(a), tag: 'alarm-' + a.hex, requireInteraction: true,
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+    return n;
+  } catch (e) { return null; }
+}
+
+// alarmTone is deliberately unlike the alert beep: two alternating
+// tones, the sound of something that wants an answer rather than a
+// notice that something happened.
+function alarmTone() {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state !== 'running') return;
+    const at = audio.currentTime;
+    for (let i = 0; i < 4; i++) {
+      const osc = audio.createOscillator(), gain = audio.createGain();
+      const t = at + i * .22;
+      osc.type = 'square';
+      osc.frequency.value = i % 2 ? 740 : 988;
+      gain.gain.setValueAtTime(.0001, t);
+      gain.gain.exponentialRampToValueAtTime(.12, t + .01);
+      gain.gain.exponentialRampToValueAtTime(.0001, t + .19);
+      osc.connect(gain); gain.connect(audio.destination);
+      osc.start(t); osc.stop(t + .2);
+    }
+  } catch (e) { /* no audio device */ }
+}
+
+let flash = false;
+setInterval(() => {
+  const ringing = alarms.filter(a => !a.acked);
+  if (!ringing.length) {
+    if (document.title !== baseTitle) document.title = baseTitle;
+    return;
+  }
+  alarmTone();
+  flash = !flash;
+  document.title = flash ? `⚠ ${ringing.map(a => a.callsign).join(', ')}` : baseTitle;
+}, 2500);
+
 pollAlerts();
 setInterval(pollAlerts, 2000);
 </script>

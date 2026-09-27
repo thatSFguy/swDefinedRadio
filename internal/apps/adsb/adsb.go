@@ -66,6 +66,11 @@ type Config struct {
 	AlertsPath string
 	AlertLog   string
 	AlertCmd   string
+
+	// Watchlist is the flights to raise a standing alarm for. It is
+	// passed in rather than opened here so the hub's two aircraft
+	// receivers can share one list. Nil watches for none.
+	Watchlist *alert.Watchlist
 }
 
 // App is a configured ADS-B receiver.
@@ -96,6 +101,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		w, err := alert.Setup(ctx, cfg.AlertsPath, cfg.AlertLog, cfg.AlertCmd)
 		if err != nil {
 			return nil, fmt.Errorf("alerts: %w", err)
+		}
+		if cfg.Watchlist != nil {
+			w.WatchFlights(cfg.Watchlist, cfg.TTL)
 		}
 		a.watcher = w
 	}

@@ -50,6 +50,7 @@ func Adsb(args []string) {
 		alertLog   = fs.String("alert-log", "data/alerts.jsonl", "append raised alerts here, one JSON object per line")
 		alertCmd   = fs.String("alert-cmd", "", "shell command to run for each alert, with ALERT_* in its environment")
 		noAlerts   = fs.Bool("no-alerts", false, "do not watch for anything")
+		watchPath  = fs.String("watchlist", "watchlist.json", "flights to sound a standing alarm for; edited from the map page")
 		alertsInit = fs.Bool("alerts-example", false, "write a starter alerts file and exit")
 		noSetPos   = fs.Bool("no-position-api", false, "refuse to set the receiver position over HTTP")
 	)
@@ -70,12 +71,18 @@ func Adsb(args []string) {
 		return
 	}
 
+	var watchlist *alert.Watchlist
+	if !*noAlerts {
+		watchlist = alert.SetupWatchlist(*watchPath)
+	}
+
 	app, err := adsb.New(ctx, adsb.Config{
 		Freq: uint32(*freq), Gain: *gain, PPM: *ppm, Device: *device,
 		Lat: *lat, Lon: *lon, PositionNote: positionSource(given, cfgPath),
 		TTL: *ttl, Raw: *rawLog, Quiet: *quiet,
 		TileURL: *tileURL, ConfigPath: cfgPath, AllowSetPosition: !*noSetPos,
 		NoAlerts: *noAlerts, AlertsPath: *alertsPath, AlertLog: *alertLog, AlertCmd: *alertCmd,
+		Watchlist: watchlist,
 	})
 	if err != nil {
 		log.Fatalf("%v", err)
