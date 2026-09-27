@@ -89,6 +89,8 @@ func Main(args []string) int {
 		return Install(rest)
 	case "uninstall":
 		return Uninstall(rest)
+	case "driver":
+		return Driver(rest)
 	}
 	fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", name)
 	Usage(os.Stderr)
@@ -104,6 +106,7 @@ func Usage(w io.Writer) {
 	fmt.Fprintln(w, "  sdr setpos LAT LON     save your antenna position as the default")
 	fmt.Fprintln(w, "  sdr alerts [n]         show what the aircraft alerts have caught")
 	fmt.Fprintln(w, "  sdr install            set this up on Windows (no admin needed)")
+	fmt.Fprintln(w, "  sdr driver             give the dongle the WinUSB driver (Windows, admin)")
 	fmt.Fprintln(w, "  sdr version            which build this is")
 	fmt.Fprintln(w, "\nFlags go after the command: sdr adsb -lat 43.2 -lon -85.6")
 	fmt.Fprintln(w, "Any command takes -h for its own flags.")

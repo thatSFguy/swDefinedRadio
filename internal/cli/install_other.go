@@ -24,6 +24,14 @@ func Install([]string) int {
 	return 0
 }
 
+// Driver likewise: off Windows the dongle's driver is the kernel's, and
+// what stops it opening is permissions.
+func Driver([]string) int {
+	fmt.Println("driver is for Windows. Here, if the dongle cannot be opened, it is")
+	fmt.Println("a permissions problem — see Permissions in the README.")
+	return 0
+}
+
 // Uninstall likewise.
 func Uninstall([]string) int {
 	fmt.Println("uninstall is for Windows. Here, remove the symlink you made.")

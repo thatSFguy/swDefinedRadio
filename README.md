@@ -165,12 +165,17 @@ nothing here looks like anything other than what it claims to be.
 On Linux and macOS these come from the package manager instead
 (`apt install rtl-sdr rtl-433`), and nothing is downloaded.
 
-The one thing it cannot do is the driver. Windows binds an RTL2832U stick
-to its television driver, which will not let anything else open it;
-[Zadig](https://zadig.akeo.ie/) rebinds it to WinUSB. That needs
-administrator rights and a choice only a person should make, since the
-same dialog can just as easily unbind something quite different. The
-installer checks, and says so.
+The one thing that needs administrator rights is the driver. Windows
+binds an RTL2832U stick to its television driver, or to nothing at all,
+and neither lets anything open it. The installer checks, and if the
+dongle is not on WinUSB it offers to fix that — Windows then asks for
+administrator rights. It uses the WinUSB driver Windows already carries
+(`winusb.inf`, signed by Microsoft), the same one you would get in Device
+Manager by choosing *Universal Serial Bus devices → WinUsb Device*, and it
+touches only the device whose USB ID says it is an RTL2832U. Nothing is
+downloaded and no certificate is trusted. Every receiver checks again
+before it starts, and `sdr driver` does it on its own.
+[Zadig](https://zadig.akeo.ie/) remains the way to do it by hand.
 
 ## Alerts
 

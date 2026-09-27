@@ -22,10 +22,10 @@ import (
 // at all: somewhere on the PATH to be, the rtl-sdr programs every
 // receiver drives, and a dongle bound to a driver that lets them open it.
 //
-// Nothing here needs administrator rights. It installs under the user's
-// own profile and edits the user's own PATH, so the only thing that will
-// ask for elevation is the driver, which is Zadig's business rather than
-// ours.
+// Only the driver needs administrator rights. Everything else installs
+// under the user's own profile and edits the user's own PATH, and the
+// driver is asked about separately, with Windows' own prompt — see
+// driver_windows.go.
 
 // Install puts this program, and what it needs, where Windows can find it.
 func Install(args []string) int {
@@ -36,6 +36,7 @@ func Install(args []string) int {
 		latest     = fs.Bool("latest", false, "take the newest upstream release instead of the tested one (skips the hash check)")
 		noPath     = fs.Bool("no-path", false, "do not touch your PATH")
 		noShortcut = fs.Bool("no-shortcut", false, "do not make a Start Menu shortcut")
+		noDriver   = fs.Bool("no-driver", false, "do not offer to install the WinUSB driver")
 		dryRun     = fs.Bool("dry-run", false, "say what would happen, and change nothing")
 	)
 	fs.Parse(args)
@@ -90,8 +91,10 @@ func Install(args []string) int {
 		_ = step(*dryRun, "Start Menu shortcut", func() error { return makeShortcut(*dir) })
 	}
 
-	fmt.Println()
-	reportDriver()
+	if !*noDriver {
+		fmt.Println()
+		offerDriver(*dryRun, false)
+	}
 	fmt.Println()
 	if short {
 		fmt.Println("The programs the receivers drive could not be downloaded, so they")
@@ -325,26 +328,6 @@ func extract(f *zip.File, dst, sum string, skipVerify bool) error {
 	return os.WriteFile(dst, buf, 0o644)
 }
 
-func reportDriver() {
-	out, err := powershell(driverScript)
-	switch {
-	case err != nil:
-		fmt.Println("  [ ] could not check the dongle's driver")
-		return
-	case out == "absent":
-		fmt.Println("  [ ] no RTL-SDR found — plug it in, then: sdr")
-		return
-	}
-	service, name, _ := strings.Cut(out, "|")
-	if strings.EqualFold(service, "WinUSB") || strings.EqualFold(service, "libusbK") {
-		fmt.Printf("  [ok] %s is on the %s driver\n", name, service)
-		return
-	}
-	fmt.Printf("  [!!] %s is on the %s driver, which will not let sdr open it\n", name, service)
-	fmt.Println("       Install Zadig from https://zadig.akeo.ie, choose this device,")
-	fmt.Println("       pick WinUSB, and press Replace Driver. Then run sdr again.")
-}
-
 // Nobody reads a switch before double-clicking. The first thing anyone
 // does with a downloaded exe is run it, so running it is what has to
 // offer the setup — otherwise the first thing they see is a complaint
@@ -355,6 +338,10 @@ func reportDriver() {
 // nobody has. It reports whether the command that follows can run.
 func OfferInstall() bool {
 	if installedHere() || haveRTLTCP() {
+		// Set up, but perhaps before the dongle was plugged in, or with
+		// Windows having since rebound it. Either way rtl_tcp would only
+		// say it found no device.
+		offerDriver(false, true)
 		return true
 	}
 
@@ -364,7 +351,7 @@ func OfferInstall() bool {
 	fmt.Println("The receivers do not talk to the dongle themselves. They drive")
 	fmt.Println("programs from two other projects, and none of them are here.")
 	fmt.Println("Setting up will, under your own account and without administrator")
-	fmt.Println("rights:")
+	fmt.Println("rights (the dongle's driver is asked about separately):")
 	fmt.Println()
 	fmt.Printf("  - copy sdr.exe to %s\n", dir)
 	fmt.Println("  - put that folder on your PATH, with a Start Menu shortcut")
@@ -599,22 +586,3 @@ func makeShortcut(dir string) error {
 		"SDR_LNK="+lnk, "SDR_EXE="+filepath.Join(dir, "sdr.exe"), "SDR_DIR="+dir)
 	return err
 }
-
-// The dongle's usual identifiers. A stock RTL2832U stick reports 2838;
-// some report 2832, and the ones with an E4000 report 2839.
-const driverScript = `
-$d = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-     Where-Object { $_.InstanceId -match 'VID_0BDA&PID_283[289]' } |
-     Select-Object -First 1
-if ($null -eq $d) { Write-Output 'absent'; exit }
-Write-Output ($d.Service + '|' + $d.FriendlyName)
-`
-
-// reportDriver says whether the dongle is bound to a driver these
-// programs can open.
-//
-// This is the part an installer cannot do for you. Windows binds an
-// RTL2832U stick to its television driver, which will not let anything
-// else open it; Zadig rebinds it to WinUSB, and that needs administrator
-// rights and a choice only a person should make, because the same dialog
-// can unbind quite different hardware.
