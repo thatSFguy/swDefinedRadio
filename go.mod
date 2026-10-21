@@ -1,3 +1,3 @@
 module github.com/thatSFguy/swDefinedRadio
 
-go 1.25.1
+go 1.26.10
